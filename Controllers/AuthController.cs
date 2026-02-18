@@ -34,7 +34,19 @@ namespace OCR_BACKEND.Controllers
             return Ok(new AuthenticateResponse(user, token));
         }
 
+        [HttpGet("getUserByAccessToken")]
+        public async Task<IActionResult> GetUserByAccessToken(string AccessToken)
+        {
+            var response = await _userService.GetUserByAccessToken(AccessToken);
+
+            if (response == null)
+                return BadRequest(new { message = "Token is Invalid" });
+
+            return Ok(response);
+        }
+
     }
+
     public class LoginModel
     {
         public string username { get; set; }

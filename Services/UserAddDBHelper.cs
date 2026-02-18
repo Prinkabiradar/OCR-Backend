@@ -23,7 +23,7 @@ namespace OCR_BACKEND.Services
                 new NpgsqlParameter("p_mobile", user.Mobile),
                 new NpgsqlParameter("p_email", user.Email),
                 new NpgsqlParameter("p_username", user.UserName),
-                new NpgsqlParameter("p_userpass", user.UserPass), // hash later
+                new NpgsqlParameter("p_userpass", user.UserPass), 
                 new NpgsqlParameter("p_roleid", user.RoleId),
                 new NpgsqlParameter("p_isactive", user.IsActive),
                 new NpgsqlParameter("p_createdby", user.CreatedBy)

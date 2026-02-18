@@ -2,7 +2,7 @@
 {
     public class UserRequest
     {
-        public int UserId { get; set; } // 0 = insert
+        public int UserId { get; set; } 
         public string FirstName { get; set; }
         public string MiddleName { get; set; }
         public string LastName { get; set; }

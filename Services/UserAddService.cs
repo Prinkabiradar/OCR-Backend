@@ -1,10 +1,12 @@
 ﻿using OCR_BACKEND.Modals;
+using System.Data;
 
 namespace OCR_BACKEND.Services
 {
     public interface IUserAddService
     {
         Task<int> InsertUpdateUserAsync(UserRequest user);
+        Task<DataTable> UsersGET(PaginationRequest model);
     }
 
     public class UserAddService : IUserAddService
@@ -16,9 +18,18 @@ namespace OCR_BACKEND.Services
             _db = db;
         }
 
-        public Task<int> InsertUpdateUserAsync(UserRequest user)
+        public async Task<int> InsertUpdateUserAsync(UserRequest user)
         {
-            return _db.InsertUpdateUserAsync(user);
+            if (!string.IsNullOrEmpty(user.UserPass))
+            {
+                user.UserPass = PasswordHelper.HashPassword(user.UserPass);
+            }
+
+            return await _db.InsertUpdateUserAsync(user);
+        }
+        public async Task<DataTable> UsersGET(PaginationRequest model)
+        {
+            return await _db.UsersGET(model);
         }
     }
 }

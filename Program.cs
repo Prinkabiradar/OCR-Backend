@@ -20,6 +20,21 @@ builder.Services.AddScoped<UserDBHelper>();
 builder.Services.AddScoped<IUserAddService, UserAddService>();
 builder.Services.AddScoped<UserAddDBHelper>();
 
+builder.Services.AddScoped<IMenuService, MenuService>();
+builder.Services.AddScoped<MenuDBHelper>();
+
+builder.Services.AddScoped<IDocumentTypeService, DocumentTypeService>();
+builder.Services.AddScoped<DocumentTypeDBHelper>();
+
+builder.Services.AddScoped<IDocumentService, DocumentService>();
+builder.Services.AddScoped<DocumentDBHelper>();
+
+builder.Services.AddScoped<IDocumentPageService, DocumentPageService>();
+builder.Services.AddScoped<DocumentPageDBHelper>();
+
+
+
+
 builder.Services.AddAuthentication("Bearer")
 .AddJwtBearer(options =>
 {

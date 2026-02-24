@@ -25,5 +25,24 @@ namespace OCR_BACKEND.Services
 
             return await cmd.ExecuteReaderAsync(CommandBehavior.CloseConnection);
         }
+        
+        public async Task<DataTable> ExecuteDataTableWithParametersAsync(
+            string functionName,
+            NpgsqlParameter[] parameters)
+        {
+            using var conn = new NpgsqlConnection(_connectionString);
+            await conn.OpenAsync();
+
+            using var cmd = new NpgsqlCommand(functionName, conn);
+            cmd.CommandType = CommandType.Text;
+            cmd.Parameters.AddRange(parameters);
+
+            using var reader = await cmd.ExecuteReaderAsync();
+
+            var dt = new DataTable();
+            dt.Load(reader);
+
+            return dt;
+        }
     }
 }

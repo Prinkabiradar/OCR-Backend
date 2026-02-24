@@ -23,7 +23,9 @@ namespace OCR_BACKEND.Services
 
         public Task<User?> AuthenticateUserAsync(string username, string password)
         {
-            return _db.AuthenticateUserAsync(username, password);
+            var hashedPassword = PasswordHelper.HashPassword(password);
+
+            return _db.AuthenticateUserAsync(username, hashedPassword);
         }
 
         public async Task<User> GetUserByAccessToken(string accessToken)

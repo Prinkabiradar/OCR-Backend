@@ -5,9 +5,8 @@ using System.Text;
 var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
-
 builder.Services.AddControllers();
-// Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
+
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.AddSingleton<SqlDBHelper>();
@@ -19,6 +18,9 @@ builder.Services.AddScoped<UserDBHelper>();
 
 builder.Services.AddScoped<IUserAddService, UserAddService>();
 builder.Services.AddScoped<UserAddDBHelper>();
+
+builder.Services.AddHttpClient<GeminiService>();
+
 
 builder.Services.AddAuthentication("Bearer")
 .AddJwtBearer(options =>
@@ -43,14 +45,11 @@ builder.Services.AddCors(options =>
         policy =>
         {
             policy.WithOrigins("http://localhost:4200")
-                  .AllowAnyHeader()
+                  .AllowAnyHeader() 
                   .AllowAnyMethod()
                   .AllowCredentials();
         });
 });
-
-
-
 
 var app = builder.Build();
 

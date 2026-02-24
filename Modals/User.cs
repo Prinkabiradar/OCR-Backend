@@ -9,4 +9,5 @@
         public string UserPass { get; set; }
         public bool IsActive { get; set; }
     }
+
 }

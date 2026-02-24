@@ -13,5 +13,6 @@ namespace OCR_BACKEND.Services
                 return Convert.ToBase64String(hash);
             }
         }
+
     }
 }

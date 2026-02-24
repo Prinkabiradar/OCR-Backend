@@ -26,7 +26,6 @@ namespace OCR_BACKEND.Controllers
                 model.username,
                 model.password
             );
-
             if (user == null)
                 return BadRequest(new { message = "Invalid credentials" });
 

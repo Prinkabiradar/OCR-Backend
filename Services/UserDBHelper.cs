@@ -11,13 +11,12 @@ namespace OCR_BACKEND.Services
         {
             _db = db;
         }
-
         public async Task<User> AuthenticateUserAsync(string username, string password)
         {
             var parameters = new[]
             {
             new NpgsqlParameter("p_username", username),
-            new NpgsqlParameter("p_userpass", password) // hash later
+            new NpgsqlParameter("p_userpass", password)  
         };
 
             string query = "SELECT * FROM fn_authenticate_user(@p_username, @p_userpass)";

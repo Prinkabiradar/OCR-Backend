@@ -44,5 +44,26 @@ namespace OCR_BACKEND.Services
 
             return dt;
         }
+        public async Task<DataTable> ExecuteFunctionAsync(string functionName, NpgsqlParameter[] parameters)
+        {
+            using var conn = new NpgsqlConnection(_connectionString);
+            await conn.OpenAsync();
+
+            // Build parameter placeholders
+            var paramPlaceholders = string.Join(", ", parameters.Select(p => "@" + p.ParameterName));
+
+            var query = $"SELECT * FROM public.{functionName}({paramPlaceholders})";
+
+            using var cmd = new NpgsqlCommand(query, conn);
+
+            cmd.Parameters.AddRange(parameters);
+
+            using var reader = await cmd.ExecuteReaderAsync();
+
+            var dt = new DataTable();
+            dt.Load(reader);
+
+            return dt;
+        }
     }
 }

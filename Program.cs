@@ -31,7 +31,8 @@ builder.Services.AddScoped<DocumentDBHelper>();
 builder.Services.AddScoped<IDocumentPageService, DocumentPageService>();
 builder.Services.AddScoped<DocumentPageDBHelper>();
 
-
+builder.Services.AddScoped<IUtilityService, UtilityService>();
+builder.Services.AddScoped<UtilityDBHelper>();
 
 
 builder.Services.AddHttpClient<GeminiService>();

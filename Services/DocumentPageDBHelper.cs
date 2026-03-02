@@ -1,5 +1,6 @@
 ﻿using Npgsql;
 using OCR_BACKEND.Modals;
+using System.Data;
 
 namespace OCR_BACKEND.Services
 {
@@ -32,6 +33,23 @@ namespace OCR_BACKEND.Services
                 return reader.GetInt32(0);
 
             return 0;
+        }
+        public async Task<DataTable> GetDocumentPagesByDocument(int documentId)
+        {
+            DataTable dt = new DataTable();
+
+            string query = "SELECT * FROM fn_documentpage_getbydocument(@p_documentid)";
+
+            var parameters = new[]
+            {
+            new NpgsqlParameter("p_documentid", documentId)
+            };
+
+            using var reader = await _sqlDBHelper.ExecuteReaderAsync(query, parameters);
+
+            dt.Load(reader);
+
+            return dt;
         }
     }
 }

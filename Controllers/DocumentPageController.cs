@@ -2,6 +2,7 @@
 using Microsoft.AspNetCore.Mvc;
 using OCR_BACKEND.Modals;
 using OCR_BACKEND.Services;
+using System.Data;
 
 namespace OCR_BACKEND.Controllers
 {
@@ -28,6 +29,27 @@ namespace OCR_BACKEND.Controllers
                 message = model.DocumentPageId == 0 ? "Created Successfully" : "Updated Successfully",
                 DocumentPageId = id
             });
+        }
+
+        [HttpGet("GetDocumentPages")]
+        public async Task<IActionResult> GetDocumentPagesByDocument(int documentId)
+        {
+            try
+            {
+                DataTable response = await _service.GetDocumentPagesByDocument(documentId);
+
+                var lst = response.AsEnumerable()
+                    .Select(r => r.Table.Columns.Cast<DataColumn>()
+                    .Select(c => new KeyValuePair<string, object>(c.ColumnName, r[c.Ordinal]))
+                    .ToDictionary(z => z.Key, z => z.Value)
+                ).ToList();
+
+                return Ok(lst);
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { message = ex.Message });
+            }
         }
     }
 }

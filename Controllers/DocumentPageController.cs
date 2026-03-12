@@ -51,5 +51,27 @@ namespace OCR_BACKEND.Controllers
                 return BadRequest(new { message = ex.Message });
             }
         }
+
+        [HttpGet("GetDocumentById")]
+        public async Task<IActionResult> GetDocumentsByDocumentType([FromQuery] DocumentFetchRequest pagination)
+        {
+            try
+            {
+                DataTable response = await _service.GetDocumentsByDocumentType(pagination);
+
+                var lst = response.AsEnumerable()
+                    .Select(r => r.Table.Columns.Cast<DataColumn>()
+                        .Select(c => new KeyValuePair<string, object>(c.ColumnName, r[c.Ordinal]))
+                        .ToDictionary(z => z.Key, z => z.Value)
+                    ).ToList();
+
+                return Ok(lst);
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { message = ex.Message });
+            }
+        }
     }
 }
+

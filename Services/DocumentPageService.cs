@@ -7,6 +7,7 @@ namespace OCR_BACKEND.Services
     {
         Task<int> InsertUpdateDocumentPage(DocumentPageRequest model);
         Task<DataTable> GetDocumentPagesByDocument(int documentId);
+        Task<DataTable> GetDocumentsByDocumentType(DocumentFetchRequest model);
     }
 
     public class DocumentPageService: IDocumentPageService
@@ -24,6 +25,10 @@ namespace OCR_BACKEND.Services
         public async Task<DataTable> GetDocumentPagesByDocument(int documentId)
         {
             return await _sqlDBHelper.GetDocumentPagesByDocument(documentId);
+        }
+        public async Task<DataTable> GetDocumentsByDocumentType(DocumentFetchRequest model)
+        {
+            return await _sqlDBHelper.GetDocumentsByDocumentType(model);
         }
     }
 }

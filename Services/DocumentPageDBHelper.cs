@@ -34,16 +34,26 @@ namespace OCR_BACKEND.Services
 
             return 0;
         }
-        public async Task<DataTable> GetDocumentPagesByDocument(int documentId)
+        public async Task<DataTable> GetDocumentPagesByDocument(OcrDocumentRequest request)
         {
             DataTable dt = new DataTable();
 
-            string query = "SELECT * FROM fn_documentpage_getbydocument(@p_documentid)";
+            string query = @"SELECT * 
+                     FROM fn_documentpage_getbydocument(
+                        @p_documentid,
+                        @p_startindex,
+                        @p_pagesize,
+                        @p_searchby,
+                        @p_searchcriteria)";
 
             var parameters = new[]
             {
-            new NpgsqlParameter("p_documentid", documentId)
-            };
+        new NpgsqlParameter("p_documentid", request.DocumentId),
+        new NpgsqlParameter("p_startindex", request.StartIndex),
+        new NpgsqlParameter("p_pagesize", request.PageSize),
+        new NpgsqlParameter("p_searchby", request.SearchBy ?? (object)DBNull.Value),
+        new NpgsqlParameter("p_searchcriteria", request.SearchCriteria ?? (object)DBNull.Value)
+    };
 
             using var reader = await _sqlDBHelper.ExecuteReaderAsync(query, parameters);
 

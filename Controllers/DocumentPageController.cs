@@ -32,11 +32,11 @@ namespace OCR_BACKEND.Controllers
         }
 
         [HttpGet("GetDocumentPages")]
-        public async Task<IActionResult> GetDocumentPagesByDocument(int documentId)
+        public async Task<IActionResult> GetDocumentPagesByDocument([FromQuery] OcrDocumentRequest request)
         {
             try
             {
-                DataTable response = await _service.GetDocumentPagesByDocument(documentId);
+                DataTable response = await _service.GetDocumentPagesByDocument(request);
 
                 var lst = response.AsEnumerable()
                     .Select(r => r.Table.Columns.Cast<DataColumn>()

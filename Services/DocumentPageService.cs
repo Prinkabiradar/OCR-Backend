@@ -6,7 +6,7 @@ namespace OCR_BACKEND.Services
     public interface IDocumentPageService
     {
         Task<int> InsertUpdateDocumentPage(DocumentPageRequest model);
-        Task<DataTable> GetDocumentPagesByDocument(int documentId);
+        Task<DataTable> GetDocumentPagesByDocument(OcrDocumentRequest request);
         Task<DataTable> GetDocumentsByDocumentType(DocumentFetchRequest model);
     }
 
@@ -22,9 +22,9 @@ namespace OCR_BACKEND.Services
         {
             return await _sqlDBHelper.InsertUpdateDocumentPage(model);
         }
-        public async Task<DataTable> GetDocumentPagesByDocument(int documentId)
+        public async Task<DataTable> GetDocumentPagesByDocument(OcrDocumentRequest request)
         {
-            return await _sqlDBHelper.GetDocumentPagesByDocument(documentId);
+            return await _sqlDBHelper.GetDocumentPagesByDocument(request);
         }
         public async Task<DataTable> GetDocumentsByDocumentType(DocumentFetchRequest model)
         {

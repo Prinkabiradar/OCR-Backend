@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using OCR_BACKEND.Modals;
 using OCR_BACKEND.Services;
 using System.Data;
+using System.Reflection;
 using System.Security.Claims;
 
 namespace OCR_BACKEND.Controllers
@@ -52,6 +53,18 @@ namespace OCR_BACKEND.Controllers
         {
             try
             {
+                var userClaims = HttpContext.User;
+                var idClaim = userClaims.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+                var RoleIdClaim = userClaims.FindFirst(ClaimTypes.Role)?.Value;
+                if (!int.TryParse(idClaim, out int Id))
+                    return BadRequest("Invalid user ID.");
+                if (!int.TryParse(RoleIdClaim, out int RoleId))
+                {
+                    return BadRequest("Invalid employee ID in token.");
+                }
+
+                // model.UserId = Id;
+                request.RoleId = RoleId;
                 DataTable response = await _service.GetDocumentPagesByDocument(request);
 
                 var lst = response.AsEnumerable()

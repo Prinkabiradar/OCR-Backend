@@ -54,7 +54,7 @@ namespace OCR_BACKEND.Services
             var parameters = new[]
             {
                 new NpgsqlParameter("p_query",      NpgsqlDbType.Text)    { Value = query },
-                new NpgsqlParameter("p_startindex", NpgsqlDbType.Integer) { Value = 0     },
+                new NpgsqlParameter("p_startindex", NpgsqlDbType.Integer) { Value = 1    },
                 new NpgsqlParameter("p_pagesize",   NpgsqlDbType.Integer) { Value = 10000 }
             };
 

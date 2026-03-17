@@ -22,10 +22,11 @@ namespace OCR_BACKEND.Services
                 new NpgsqlParameter("p_pagenumber", model.PageNumber),
                 new NpgsqlParameter("p_extractedtext", model.ExtractedText),
                 new NpgsqlParameter("p_statusid", model.StatusId),
-                new NpgsqlParameter("p_userid", model.CreatedBy)
+                new NpgsqlParameter("p_userid", model.UserId),
+                new NpgsqlParameter("p_roleid", model.RoleId)
             };
 
-            string query = "SELECT insertupdate_documentpage(@p_documentpageid,@p_documentid,@p_pagenumber,@p_extractedtext,@p_statusid,@p_userid)";
+            string query = "SELECT insertupdate_documentpage(@p_documentpageid,@p_documentid,@p_pagenumber,@p_extractedtext,@p_statusid,@p_userid,@p_roleid)";
 
             using var reader = await _sqlDBHelper.ExecuteReaderAsync(query, parameters);
 
@@ -44,7 +45,8 @@ namespace OCR_BACKEND.Services
                         @p_startindex,
                         @p_pagesize,
                         @p_searchby,
-                        @p_searchcriteria)";
+                        @p_searchcriteria,
+                        @p_roleid)";
 
             var parameters = new[]
             {
@@ -52,7 +54,8 @@ namespace OCR_BACKEND.Services
         new NpgsqlParameter("p_startindex", request.StartIndex),
         new NpgsqlParameter("p_pagesize", request.PageSize),
         new NpgsqlParameter("p_searchby", request.SearchBy ?? (object)DBNull.Value),
-        new NpgsqlParameter("p_searchcriteria", request.SearchCriteria ?? (object)DBNull.Value)
+        new NpgsqlParameter("p_searchcriteria", request.SearchCriteria ?? (object)DBNull.Value),
+        new NpgsqlParameter("p_roleid", request.RoleId)
     };
 
             using var reader = await _sqlDBHelper.ExecuteReaderAsync(query, parameters);

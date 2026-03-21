@@ -7,5 +7,6 @@
         public string? SearchBy { get; set; }
         public string? SearchCriteria { get; set; }
         public int? DocumentTypeId { get; set; }
+        public int RoleId { get; set; }
     }
 }

@@ -84,6 +84,18 @@ namespace OCR_BACKEND.Controllers
         {
             try
             {
+                var userClaims = HttpContext.User;
+                var idClaim = userClaims.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+                var RoleIdClaim = userClaims.FindFirst(ClaimTypes.Role)?.Value;
+                if (!int.TryParse(idClaim, out int Id))
+                    return BadRequest("Invalid user ID.");
+                if (!int.TryParse(RoleIdClaim, out int RoleId))
+                {
+                    return BadRequest("Invalid employee ID in token.");
+                }
+
+                // model.UserId = Id;
+                pagination.RoleId = RoleId;
                 DataTable response = await _service.GetDocumentsByDocumentType(pagination);
 
                 var lst = response.AsEnumerable()

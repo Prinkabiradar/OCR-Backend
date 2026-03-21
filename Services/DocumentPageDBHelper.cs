@@ -67,12 +67,13 @@ namespace OCR_BACKEND.Services
         public async Task<DataTable> GetDocumentsByDocumentType(DocumentFetchRequest model)
         {
             DataTable dt = new DataTable();
-            string query = @"SELECT * FROM fn_document_getbydocumenttype(
+            string query = @"SELECT * FROM public.fn_document_getbydocumenttype(
                                 @p_documenttypeid,
                                 @p_startindex,
                                 @p_pagesize,
                                 @p_searchby,
-                                @p_searchcriteria)";
+                                @p_searchcriteria,
+                                @p_roleid)";
 
             var parameters = new[]
             {
@@ -80,7 +81,8 @@ namespace OCR_BACKEND.Services
                 new NpgsqlParameter("p_startindex", model.StartIndex),
                 new NpgsqlParameter("p_pagesize", model.PageSize),
                 new NpgsqlParameter("p_searchby", (object?)model.SearchBy ?? DBNull.Value),
-                new NpgsqlParameter("p_searchcriteria", (object?)model.SearchCriteria ?? DBNull.Value)
+                new NpgsqlParameter("p_searchcriteria", (object?)model.SearchCriteria ?? DBNull.Value),
+                new NpgsqlParameter("p_roleid", model.RoleId)
             };
 
             using var reader = await _sqlDBHelper.ExecuteReaderAsync(query, parameters);

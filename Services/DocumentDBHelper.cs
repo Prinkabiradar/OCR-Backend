@@ -1,5 +1,6 @@
 ﻿using Npgsql;
 using OCR_BACKEND.Modals;
+using System.Data;
 
 namespace OCR_BACKEND.Services
 {
@@ -31,6 +32,24 @@ namespace OCR_BACKEND.Services
                 return reader.GetInt32(0);
 
             return 0;
+        }
+
+        public async Task<DataTable> GetDocuments(DocumentFetchRequest model)
+        {
+            DataTable dt = new DataTable();
+            string query = @"SELECT * FROM fn_document_get(@p_startindex, @p_pagesize, @p_searchby, @p_searchcriteria)";
+
+            var parameters = new[]
+            {
+                new NpgsqlParameter("p_startindex", model.StartIndex),
+                new NpgsqlParameter("p_pagesize", model.PageSize),
+                new NpgsqlParameter("p_searchby", (object?)model.SearchBy ?? DBNull.Value),
+                new NpgsqlParameter("p_searchcriteria", (object?)model.SearchCriteria ?? DBNull.Value)
+            };
+
+            using var reader = await _sqlDBHelper.ExecuteReaderAsync(query, parameters);
+            dt.Load(reader);
+            return dt;
         }
     }
 }

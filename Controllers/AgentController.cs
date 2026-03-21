@@ -1,6 +1,8 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using OCR_BACKEND.Modals;
 using OCR_BACKEND.Services;
+using System.Data;
+using System.Reflection;
 
 namespace OCR_BACKEND.Controllers
 {
@@ -43,6 +45,44 @@ namespace OCR_BACKEND.Controllers
 
             var summary = await _service.Summarize(request.Question);
             return Ok(new { summary });
+        }
+
+        [HttpPost("save-summary")]
+        public async Task<IActionResult> SaveSummary([FromBody] SaveSummaryRequest request)
+        {
+            if (string.IsNullOrWhiteSpace(request.DocumentName) ||
+                string.IsNullOrWhiteSpace(request.SummaryText))
+                return BadRequest(new { message = "DocumentName and SummaryText are required." });
+
+            var result = await _service.SaveSummary(
+                request.DocumentName,
+                request.SummaryText,
+                request.SummaryId,
+                request.UserId,
+                request.RoleId);       
+
+            return Ok(result);
+        }
+
+        [HttpGet("GetSummaryData")]
+        public async Task<IActionResult> GetSummaryData([FromQuery] SummaryData model)
+        {
+            try
+            {
+                DataTable response = await _service.GetSummaryData(model);
+
+                var lst = response.AsEnumerable()
+                    .Select(r => r.Table.Columns.Cast<DataColumn>()
+                        .Select(c => new KeyValuePair<string, object>(c.ColumnName, r[c.Ordinal]))
+                        .ToDictionary(z => z.Key, z => z.Value)
+                    ).ToList();
+
+                return Ok(lst);
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { message = ex.Message });
+            }
         }
     }
 }

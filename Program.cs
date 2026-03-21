@@ -38,6 +38,11 @@ builder.Services.AddHttpClient();
 builder.Services.AddScoped<AgentDBHelper>();
 builder.Services.AddScoped<IAgentService, AgentService>();
 
+builder.Services.AddScoped<DashboardDBHelper>();
+builder.Services.AddScoped<IDashboardService, DashboardService>();
+
+
+
 
 builder.Services.AddHttpClient<GeminiService>();
 
@@ -61,20 +66,23 @@ builder.Services.AddAuthentication("Bearer")
 
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("AllowAngular",
-        policy =>
-        {
-            policy.WithOrigins("http://localhost:4200")
-                  .AllowAnyHeader() 
-                  .AllowAnyMethod()
-                  .AllowCredentials();
-        });
+    options.AddPolicy("AllowAngular", policy =>
+    {
+        policy
+            .WithOrigins(
+                "http://localhost:4200",            
+                "https://localhost:4200",           
+                "https://tts.sharpflux.com"         
+            )
+            .AllowAnyHeader()
+            .AllowAnyMethod()
+            .AllowCredentials();
+    });
 });
 
 var app = builder.Build();
 
-
-// Configure the HTTP request pipeline.
+ 
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
@@ -82,11 +90,12 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
-app.UseCors("AllowAngular");
+app.UseRouting();                
+
+app.UseCors("AllowAngular");    
+
 app.UseAuthentication();
- 
 app.UseAuthorization();
 
 app.MapControllers();
-
 app.Run();

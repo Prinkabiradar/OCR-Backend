@@ -21,20 +21,18 @@ namespace OCR_BACKEND.Controllers
         [HttpPost("InsertUpdateDocumentPage")]
         public async Task<IActionResult> InsertUpdateDocumentPage(DocumentPageRequest model)
         {
-            var userClaims = HttpContext.User;
+            //var userClaims = HttpContext.User;
+            //var idClaim = userClaims.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+            //var RoleIdClaim = userClaims.FindFirst(ClaimTypes.Role)?.Value;
+            //if (!int.TryParse(idClaim, out int Id))
+            //    return BadRequest("Invalid user ID.");
+            //if (!int.TryParse(RoleIdClaim, out int RoleId))
+            //{
+            //    return BadRequest("Invalid employee ID in token.");
+            //}
 
-
-            var idClaim = userClaims.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-            var RoleIdClaim = userClaims.FindFirst(ClaimTypes.Role)?.Value;
-            if (!int.TryParse(idClaim, out int Id))
-                return BadRequest("Invalid user ID.");
-            if (!int.TryParse(RoleIdClaim, out int RoleId))
-            {
-                return BadRequest("Invalid employee ID in token.");
-            }
-
-            model.UserId = Id;
-            model.RoleId = RoleId;
+            //model.UserId = Id;
+            //model.RoleId = RoleId;
 
             var id = await _service.InsertUpdateDocumentPage(model);
 

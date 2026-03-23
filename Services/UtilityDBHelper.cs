@@ -25,4 +25,21 @@ public class UtilityDBHelper
         var result = await _sqlDBHelper.ExecuteFunctionAsync("alldropdown", parameters);
         return result;
     }
+    public async Task<bool> DeleteForAll(int typeId, int primaryId, int userId)
+    {
+        NpgsqlParameter[] parameters =
+        {
+        new NpgsqlParameter("p_id",   primaryId),
+        new NpgsqlParameter("p_type", typeId)
+    };
+
+        var result = await _sqlDBHelper.ExecuteFunctionAsync("alldelete", parameters);
+
+        // Read the boolean result from the returned DataTable
+        if (result != null && result.Rows.Count > 0)
+        {
+            return Convert.ToBoolean(result.Rows[0][0]);
+        }
+        return false;
+    }
 }

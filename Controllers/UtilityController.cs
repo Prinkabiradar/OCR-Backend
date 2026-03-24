@@ -28,4 +28,10 @@ public class UtilityController : ControllerBase
 
         return Ok(result);
     }
+    [HttpPost("DeleteForAll")]
+    public async Task<IActionResult> DeleteForAll(int typeId, int primaryId, int userId)
+    {
+        var result = await _service.DeleteForAll(typeId, primaryId, userId);
+        return Ok(result);
+    }
 }

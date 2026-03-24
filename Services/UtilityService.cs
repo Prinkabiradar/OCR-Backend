@@ -6,6 +6,7 @@ namespace OCR_BACKEND.Services
     public interface IUtilityService
     {
         Task<List<DropdownOption>> AllDropdown(string searchTerm, int page, int pageSize, int type, int parentId);
+        Task<bool> DeleteForAll(int typeId, int primaryId, int userId);
     }
     public class UtilityService : IUtilityService
     {
@@ -32,6 +33,11 @@ namespace OCR_BACKEND.Services
             }
 
             return list;
+        }
+        public async Task<bool> DeleteForAll(int typeId, int primaryId, int userId)
+        {
+            var result = await _dbHelper.DeleteForAll(typeId, primaryId, userId);
+            return result;
         }
     }
 }

@@ -32,9 +32,9 @@
         public int SummaryId { get; set; }
         public string DocumentName { get; set; } = string.Empty;
         public string SummaryText { get; set; } = string.Empty;
-        public DateTime UpdatedAt { get; set; }       
+        public DateTime? UpdatedAt { get; set; }       
         public int? UpdatedBy { get; set; }
-        public DateTime CreatedAt { get; set; }
+        public DateTime? CreatedAt { get; set; }
         public int? CreatedBy { get; set; }
         public DateTime? ApprovedAt { get; set; }
         public int? ApprovedBy { get; set; }

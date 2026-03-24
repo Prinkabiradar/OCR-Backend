@@ -13,44 +13,77 @@ namespace OCR_BACKEND.Services
             _config = config;
             _http = http;
         }
-
-        public async Task<string> ExtractTextFromImage(IFormFile file)
+        public async Task<string> ExtractTextFromImageBytes(byte[] bytes, string contentType)
         {
             var apiKey = _config["Gemini:ApiKey"];
-
-            using var ms = new MemoryStream();
-            await file.CopyToAsync(ms);
-            var bytes = ms.ToArray();
             var base64 = Convert.ToBase64String(bytes);
 
             var body = new
             {
                 contents = new[]
                 {
-                new {
-                    parts = new object[]
-                    {
-                        new { text = "Extract all text from this image (OCR)." },
-                        new {
+                     new {
+                        parts = new object[]
+                {
+                    new { text = "Extract all text from this image (OCR)." },
+                    new {
                             inline_data = new {
-                                mime_type = file.ContentType,
-                                data = base64
+                            mime_type = contentType,
+                            data = base64
                             }
+                        }
                         }
                     }
                 }
-            }
             };
 
             var json = JsonSerializer.Serialize(body);
-
             var response = await _http.PostAsync(
-    $"https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key={apiKey}",
-    new StringContent(json, Encoding.UTF8, "application/json")
-);
-
+                $"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={apiKey}",
+                new StringContent(json, Encoding.UTF8, "application/json")
+            );
 
             return await response.Content.ReadAsStringAsync();
         }
+
+
+        //        public async Task<string> ExtractTextFromImage(IFormFile file)
+        //        {
+        //            var apiKey = _config["Gemini:ApiKey"];
+
+        //            using var ms = new MemoryStream();
+        //            await file.CopyToAsync(ms);
+        //            var bytes = ms.ToArray();
+        //            var base64 = Convert.ToBase64String(bytes);
+
+        //            var body = new
+        //            {
+        //                contents = new[]
+        //                {
+        //                new {
+        //                    parts = new object[]
+        //                    {
+        //                        new { text = "Extract all text from this image (OCR)." },
+        //                        new {
+        //                            inline_data = new {
+        //                                mime_type = file.ContentType,
+        //                                data = base64
+        //                            }
+        //                        }
+        //                    }
+        //                }
+        //            }
+        //            };
+
+        //            var json = JsonSerializer.Serialize(body);
+
+        //            var response = await _http.PostAsync(
+        //    $"https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key={apiKey}",
+        //    new StringContent(json, Encoding.UTF8, "application/json")
+        //);
+
+
+        //            return await response.Content.ReadAsStringAsync();
+        //        }
     }
 }

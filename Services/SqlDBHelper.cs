@@ -11,7 +11,7 @@ namespace OCR_BACKEND.Services
         {
             _connectionString = configuration.GetConnectionString("PostgresConnection");
         }
-
+        public NpgsqlConnection CreateConnection() => new NpgsqlConnection(_connectionString);
         public async Task<NpgsqlDataReader> ExecuteReaderAsync(
             string functionName,
             NpgsqlParameter[] parameters)

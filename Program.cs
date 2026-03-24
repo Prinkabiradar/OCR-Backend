@@ -1,4 +1,6 @@
 using Microsoft.IdentityModel.Tokens;
+using OCR_BACKEND.BackgroundServices;
+using OCR_BACKEND.Queue;
 using OCR_BACKEND.Services;
 using System.Text;
 
@@ -45,7 +47,10 @@ builder.Services.AddScoped<IDashboardService, DashboardService>();
 
 
 builder.Services.AddHttpClient<GeminiService>();
-
+builder.Services.AddSingleton<OcrJobQueue>();
+builder.Services.AddSingleton<OcrJobDBHelper>();    
+builder.Services.AddScoped<IOcrJobService, OcrJobService>();
+builder.Services.AddHostedService<OcrWorkerService>();
 
 builder.Services.AddAuthentication("Bearer")
 .AddJwtBearer(options =>
@@ -90,10 +95,8 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
+app.UseCors("AllowAngular");
 app.UseRouting();                
-
-app.UseCors("AllowAngular");    
-
 app.UseAuthentication();
 app.UseAuthorization();
 

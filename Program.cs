@@ -43,6 +43,10 @@ builder.Services.AddScoped<IAgentService, AgentService>();
 builder.Services.AddScoped<DashboardDBHelper>();
 builder.Services.AddScoped<IDashboardService, DashboardService>();
 
+builder.Services.AddScoped<ISuggestionService, SuggestionService>();
+builder.Services.AddScoped<SuggestionDBHelper>();
+
+
 
 
 

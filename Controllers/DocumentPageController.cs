@@ -51,18 +51,18 @@ namespace OCR_BACKEND.Controllers
         {
             try
             {
-                var userClaims = HttpContext.User;
-                var idClaim = userClaims.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-                var RoleIdClaim = userClaims.FindFirst(ClaimTypes.Role)?.Value;
-                if (!int.TryParse(idClaim, out int Id))
-                    return BadRequest("Invalid user ID.");
-                if (!int.TryParse(RoleIdClaim, out int RoleId))
-                {
-                    return BadRequest("Invalid employee ID in token.");
-                }
+                //var userClaims = HttpContext.User;
+                //var idClaim = userClaims.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+                //var RoleIdClaim = userClaims.FindFirst(ClaimTypes.Role)?.Value;
+                //if (!int.TryParse(idClaim, out int Id))
+                //    return BadRequest("Invalid user ID.");
+                //if (!int.TryParse(RoleIdClaim, out int RoleId))
+                //{
+                //    return BadRequest("Invalid employee ID in token.");
+                //}
 
                 // model.UserId = Id;
-                request.RoleId = RoleId;
+                request.RoleId = 3;
                 DataTable response = await _service.GetDocumentPagesByDocument(request);
 
                 var lst = response.AsEnumerable()
@@ -103,6 +103,39 @@ namespace OCR_BACKEND.Controllers
                         .Select(c => new KeyValuePair<string, object>(c.ColumnName, r[c.Ordinal]))
                         .ToDictionary(z => z.Key, z => z.Value)
                     ).ToList();
+
+                return Ok(lst);
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { message = ex.Message });
+            }
+        }
+
+        [HttpGet("GetSuggestionPages")]
+        public async Task<IActionResult> GetSuggestionPages([FromQuery] SuggestionPageRequest request)
+        {
+            try
+            {
+                var userClaims = HttpContext.User;
+                var idClaim = userClaims.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+                var RoleIdClaim = userClaims.FindFirst(ClaimTypes.Role)?.Value;
+                if (!int.TryParse(idClaim, out int Id))
+                    return BadRequest("Invalid user ID.");
+                if (!int.TryParse(RoleIdClaim, out int RoleId))
+                {
+                    return BadRequest("Invalid employee ID in token.");
+                }
+
+                // model.UserId = Id;
+                request.RoleId = RoleId;
+                DataTable response = await _service.GetSuggestionPages(request);
+
+                var lst = response.AsEnumerable()
+                    .Select(r => r.Table.Columns.Cast<DataColumn>()
+                    .Select(c => new KeyValuePair<string, object>(c.ColumnName, r[c.Ordinal]))
+                    .ToDictionary(z => z.Key, z => z.Value)
+                ).ToList();
 
                 return Ok(lst);
             }

@@ -23,10 +23,11 @@ namespace OCR_BACKEND.Services
                 new NpgsqlParameter("p_extractedtext", model.ExtractedText),
                 new NpgsqlParameter("p_statusid", model.StatusId),
                 new NpgsqlParameter("p_userid", model.UserId),
-                new NpgsqlParameter("p_roleid", model.RoleId)
+                new NpgsqlParameter("p_roleid", model.RoleId),
+                new NpgsqlParameter("p_rejectreason", model.RejectionReason)
             };
 
-            string query = "SELECT insertupdate_documentpage(@p_documentpageid,@p_documentid,@p_pagenumber,@p_extractedtext,@p_statusid,@p_userid,@p_roleid)";
+            string query = "SELECT insertupdate_documentpage(@p_documentpageid,@p_documentid,@p_pagenumber,@p_extractedtext,@p_statusid,@p_userid,@p_roleid,@p_rejectreason)";
 
             using var reader = await _sqlDBHelper.ExecuteReaderAsync(query, parameters);
 
@@ -87,6 +88,38 @@ namespace OCR_BACKEND.Services
 
             using var reader = await _sqlDBHelper.ExecuteReaderAsync(query, parameters);
             dt.Load(reader);
+            return dt;
+        }
+
+        public async Task<DataTable> GetSuggestionPages(SuggestionPageRequest request)
+        {
+            DataTable dt = new DataTable();
+
+            string query = @"SELECT * 
+                     FROM fn_getsuggesteddocument(
+                        @p_documentid,
+                        @p_documentpageid,
+                        @p_startindex,
+                        @p_pagesize,
+                        @p_searchby,
+                        @p_searchcriteria,
+                        @p_roleid)";
+
+            var parameters = new[]
+            {
+        new NpgsqlParameter("p_documentid", request.DocumentId),
+        new NpgsqlParameter("p_documentpageid", request.DocumentPageId),
+        new NpgsqlParameter("p_startindex", request.StartIndex),
+        new NpgsqlParameter("p_pagesize", request.PageSize),
+        new NpgsqlParameter("p_searchby", request.SearchBy ?? (object)DBNull.Value),
+        new NpgsqlParameter("p_searchcriteria", request.SearchCriteria ?? (object)DBNull.Value),
+        new NpgsqlParameter("p_roleid", request.RoleId)
+    };
+
+            using var reader = await _sqlDBHelper.ExecuteReaderAsync(query, parameters);
+
+            dt.Load(reader);
+
             return dt;
         }
     }

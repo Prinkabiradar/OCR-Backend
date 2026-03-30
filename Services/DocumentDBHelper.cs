@@ -51,5 +51,23 @@ namespace OCR_BACKEND.Services
             dt.Load(reader);
             return dt;
         }
+        public async Task<bool> ManageDocumentLock(ManageLockRequest model)
+        {
+            var parameters = new[]
+            {
+                new NpgsqlParameter("p_documentid", model.DocumentId),
+                new NpgsqlParameter("p_userid", model.UserId),
+                new NpgsqlParameter("p_action", model.Action)
+            };
+
+            string query = "SELECT public.fn_manage_document_lock(@p_documentid,@p_userid,@p_action)";
+
+            using var reader = await _sqlDBHelper.ExecuteReaderAsync(query, parameters);
+
+            if (await reader.ReadAsync())
+                return reader.GetBoolean(0);
+
+            return false;
+        }
     }
 }

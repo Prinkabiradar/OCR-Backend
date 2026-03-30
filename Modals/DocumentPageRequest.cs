@@ -8,7 +8,7 @@
         public string ExtractedText { get; set; }
         public int StatusId { get; set; }
         public int UserId { get; set; }
-
+        public string RejectionReason { get; set; }
         public int RoleId { get; set; }
     }
 }

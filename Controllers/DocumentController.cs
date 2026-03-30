@@ -52,5 +52,30 @@ namespace OCR_BACKEND.Controllers
                 return BadRequest(new { message = ex.Message });
             }
         }
+        [HttpPost("ManageLock")]
+        public async Task<IActionResult> ManageLock(ManageLockRequest model)
+        {
+            try
+            {
+                var result = await _service.ManageDocumentLock(model);
+
+                if (!result && model.Action.ToUpper() == "LOCK")
+                {
+                    return BadRequest(new
+                    {
+                        message = "This Document is under review by another user"
+                    });
+                }
+
+                return Ok(new
+                {
+                    success = true
+                });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { message = ex.Message });
+            }
+        }
     }
 }

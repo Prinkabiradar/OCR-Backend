@@ -144,22 +144,26 @@ namespace OCR_BACKEND.Services
 
             var fullText = string.Join("\n\n",
                 pages.Select(p => $"Page {p.PageNumber}:\n{p.ExtractedText}"));
-
+            //gemini-3.0-pro
             var apiKey = _config["Gemini:ApiKey"];
             var url = $"https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key={apiKey}";
 
             var prompt = $@"
-        You are a document summarizer.
-        Below is the full text of a document called '{documentName}'.
-        Please provide:
-        1. A brief summary (3-5 sentences)
-        2. Key points (bullet points)
-        3. Important names or dates mentioned
-        4. Overall theme or purpose of the document
+                        You are a document summarizer.
+                        Below is the full text of a document called '{documentName}'.
+                        Instructions:
+                        - Detect the language of the document text.
+                        - Generate the summary in the SAME language as the document.
+                        - Do NOT translate the output into another language.
+                        Please provide:
+                        1. A brief summary (3-5 sentences)
+                        2. Key points (bullet points)
+                        3. Important names or dates mentioned
+                        4. Overall theme or purpose of the document
 
-        DOCUMENT TEXT:
-        {fullText}
-    ";
+                        DOCUMENT TEXT:
+                        {fullText}
+                    ";
 
             var requestBody = new
             {
@@ -225,7 +229,7 @@ namespace OCR_BACKEND.Services
         }
 
         public async Task<DataTable> GetSummaryData(SummaryData model)
-        {
+       {
             return await _agentDBHelper.GetSummaryData(model);
         }
     }

@@ -51,6 +51,7 @@ builder.Services.AddSingleton<OcrJobQueue>();
 builder.Services.AddSingleton<OcrJobDBHelper>();    
 builder.Services.AddScoped<IOcrJobService, OcrJobService>();
 builder.Services.AddHostedService<OcrWorkerService>();
+builder.Services.AddScoped<IFileConversionService, FileConversionService>();
 
 builder.Services.AddAuthentication("Bearer")
 .AddJwtBearer(options =>

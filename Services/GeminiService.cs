@@ -18,23 +18,26 @@ namespace OCR_BACKEND.Services
             var apiKey = _config["Gemini:ApiKey"];
             var base64 = Convert.ToBase64String(bytes);
 
+            var prompt = @"Analyse this document image and return a JSON object with exactly these three fields:
+            {
+              ""extracted_text"": ""<all text extracted from the document via OCR>"",
+              ""suggested_document_type"": ""<one of: Letter, Poem, Novel, Book, Certificate, Invoice, Report, Legal, Article, Receipt, Form, Contract, Newspaper, or the best match you can infer>"",
+              ""suggested_document_name"": ""<the document's own title or heading if visible, otherwise a short descriptive name based on its content — max 10 words>""
+            }
+            Return ONLY the JSON. No markdown, no explanation, no code fences.";
+
             var body = new
             {
                 contents = new[]
                 {
-                     new {
-                        parts = new object[]
+            new {
+                parts = new object[]
                 {
-                    new { text = "Extract all text from this image (OCR)." },
-                    new {
-                            inline_data = new {
-                            mime_type = contentType,
-                            data = base64
-                            }
-                        }
-                        }
-                    }
+                    new { text = prompt },
+                    new { inline_data = new { mime_type = contentType, data = base64 } }
                 }
+            }
+        }
             };
 
             var json = JsonSerializer.Serialize(body);
@@ -42,7 +45,6 @@ namespace OCR_BACKEND.Services
                 $"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={apiKey}",
                 new StringContent(json, Encoding.UTF8, "application/json")
             );
-
             return await response.Content.ReadAsStringAsync();
         }
 

@@ -13,7 +13,8 @@ namespace OCR_BACKEND.BackgroundServices
         private readonly GeminiService _gemini;
         private readonly ILogger<OcrWorkerService> _logger;
 
-        public OcrWorkerService(OcrJobQueue ocrJobQueue,
+        public OcrWorkerService(
+            OcrJobQueue ocrJobQueue,
             OcrJobDBHelper ocrJobDBHelper,
             GeminiService gemini,
             ILogger<OcrWorkerService> logger)
@@ -79,7 +80,6 @@ namespace OCR_BACKEND.BackgroundServices
 
                     var batchResults = await Task.WhenAll(batchTasks);
 
-                    // Bulk insert batch results into DB
                     await _ocrJobDBHelper.BulkInsertJobResults(batchResults.ToList());
 
                     processedCount += batchResults.Length;
@@ -89,12 +89,22 @@ namespace OCR_BACKEND.BackgroundServices
                         item.JobId, processedCount, item.FilePaths.Count);
                 }
 
-                await _ocrJobDBHelper.UpdateJobStatus(item.JobId, "Completed", item.FilePaths.Count);
+                await _ocrJobDBHelper.UpdateJobStatus(
+                    item.JobId, "Completed", item.FilePaths.Count);
 
-                // Clean up temp files
+                // Clean up the entire job temp directory (includes converted sub-folder)
                 var dir = Path.GetDirectoryName(item.FilePaths[0]);
-                if (dir is not null && Directory.Exists(dir))
-                    Directory.Delete(dir, recursive: true);
+                if (dir is not null)
+                {
+                    // Walk up one level if we're inside /converted
+                    var parent = Path.GetDirectoryName(dir);
+                    var target = Path.GetFileName(dir) == "converted" && parent is not null
+                        ? parent
+                        : dir;
+
+                    if (Directory.Exists(target))
+                        Directory.Delete(target, recursive: true);
+                }
 
                 _logger.LogInformation("Job {JobId} completed", item.JobId);
             }
@@ -105,6 +115,10 @@ namespace OCR_BACKEND.BackgroundServices
             }
         }
 
+        /// <summary>
+        /// Maps file extension to a MIME type that Gemini accepts.
+        /// All paths here are already converted — only native formats remain.
+        /// </summary>
         private static string ResolveContentType(string path) =>
             Path.GetExtension(path).ToLowerInvariant() switch
             {
@@ -112,6 +126,7 @@ namespace OCR_BACKEND.BackgroundServices
                 ".jpg" or ".jpeg" => "image/jpeg",
                 ".webp" => "image/webp",
                 ".gif" => "image/gif",
+                ".pdf" => "application/pdf",   // ← covers converted Office docs
                 _ => "application/octet-stream"
             };
     }

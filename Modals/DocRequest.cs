@@ -6,6 +6,6 @@
         public int PageSize { get; set; }
         public string? SearchBy { get; set; }
         public string? SearchCriteria { get; set; }
-        public int RoleId { get; set; }
+        public int? RoleId { get; set; }
     }
 }

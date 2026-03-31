@@ -57,6 +57,9 @@ builder.Services.AddScoped<IOcrJobService, OcrJobService>();
 builder.Services.AddHostedService<OcrWorkerService>();
 builder.Services.AddScoped<IFileConversionService, FileConversionService>();
 
+builder.Services.AddScoped<IRoleAccessService, RoleAccessService>();
+builder.Services.AddScoped<RoleAccessDBHelper>();
+
 builder.Services.AddAuthentication("Bearer")
 .AddJwtBearer(options =>
 {

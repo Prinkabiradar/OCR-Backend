@@ -49,7 +49,7 @@ builder.Services.AddScoped<SuggestionDBHelper>();
 
 
 
-
+builder.Services.AddScoped<IEmailService, EmailService>();
 builder.Services.AddHttpClient<GeminiService>();
 builder.Services.AddSingleton<OcrJobQueue>();
 builder.Services.AddSingleton<OcrJobDBHelper>();    

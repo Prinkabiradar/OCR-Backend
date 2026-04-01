@@ -65,5 +65,14 @@ namespace OCR_BACKEND.Services
 
             return dt;
         }
+        public async Task ExecuteNonQueryAsync(string query, NpgsqlParameter[] parameters)
+        {
+            using var conn = new NpgsqlConnection(_connectionString);
+            await conn.OpenAsync();
+            using var cmd = new NpgsqlCommand(query, conn);
+            cmd.CommandType = CommandType.Text;
+            cmd.Parameters.AddRange(parameters);
+            await cmd.ExecuteNonQueryAsync();
+        }
     }
 }

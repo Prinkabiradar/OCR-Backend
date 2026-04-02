@@ -12,7 +12,7 @@ public class JwtHelper
     public JwtHelper(IConfiguration config)
     {
         _config = config;
-        _secret = config.GetSection("JwtConfig").GetSection("Key").Value;
+        _secret = config["Jwt:Key"];
     }
 
     public string GenerateToken(User user)
@@ -55,7 +55,9 @@ public class JwtHelper
                 ValidateIssuerSigningKey = true,
                 IssuerSigningKey = new SymmetricSecurityKey(key),
                 ValidateIssuer = true,
+                ValidIssuer = _config["Jwt:Issuer"],
                 ValidateAudience = true,
+                ValidAudience = _config["Jwt:Audience"],
                 RequireExpirationTime = true,
                 ValidateLifetime = true,
                 ClockSkew = TimeSpan.Zero

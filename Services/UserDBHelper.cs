@@ -38,7 +38,7 @@ namespace OCR_BACKEND.Services
 
             return null;
         }
-        // Add these methods to UserDBHelper.cs
+ 
 
         public async Task<User?> GetUserByEmailOrMobileAsync(string input)
         {

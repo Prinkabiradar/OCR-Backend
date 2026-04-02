@@ -1,11 +1,7 @@
-﻿
- 
-
-
-  // EmailService.cs
+﻿ 
 using MimeKit;
 using MailKit.Net.Smtp;
-using MailKit.Security;   // ← add this using
+using MailKit.Security;   
 
 namespace OCR_BACKEND.Services
 {
@@ -50,7 +46,7 @@ namespace OCR_BACKEND.Services
             await client.ConnectAsync(
                 _config["Email:SmtpHost"],
                 int.Parse(_config["Email:SmtpPort"]),
-                SecureSocketOptions.StartTls   // ← fix: was bool, now explicit StartTls
+                SecureSocketOptions.StartTls    
             );
             await client.AuthenticateAsync(
                 _config["Email:SmtpUser"],

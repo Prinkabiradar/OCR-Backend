@@ -43,7 +43,7 @@ namespace OCR_BACKEND.Controllers
 
             return Ok(response);
         }
-        // Add to AuthController.cs
+  
 
         [HttpPost("send-otp")]
         public async Task<IActionResult> SendOtp([FromBody] SendOtpModel model)
@@ -54,7 +54,7 @@ namespace OCR_BACKEND.Controllers
             var (success, message) = await _userService.SendOtpAsync(model.EmailOrMobile);
 
             if (!success)
-                return BadRequest(new { message });   // ← return 400 so Angular error block fires
+                return BadRequest(new { message });   
 
             return Ok(new { success, message });
         }
@@ -80,12 +80,6 @@ namespace OCR_BACKEND.Controllers
                 ? Ok(new { message = "Password reset successful." })
                 : BadRequest(new { message = "Failed to reset password." });
         }
-
-        // Register in Program.cs:
-        // builder.Services.AddScoped<IEmailService, EmailService>();
-
-        // Models
-   
 
     }
 

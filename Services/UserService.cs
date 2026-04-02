@@ -37,9 +37,9 @@ namespace OCR_BACKEND.Services
             try
             {
                 var jwtService = new JwtHelper(_config);
-                var tokenValidationResult = jwtService.ValidateToken(accessToken);
+                    var tokenValidationResult = jwtService.ValidateToken(accessToken);
 
-                if (tokenValidationResult.IsValid)
+                    if (tokenValidationResult.IsValid)
                 {
                     var idClaim = tokenValidationResult.Claims.FirstOrDefault(claim => claim.Type == ClaimTypes.NameIdentifier);
                     var userNameClaim = tokenValidationResult.Claims.FirstOrDefault(claim => claim.Type == ClaimTypes.Name);
@@ -55,7 +55,7 @@ namespace OCR_BACKEND.Services
                         {
                             UserId = int.Parse(idClaim.Value),
                             UserName = userNameClaim.Value,
-                            RoleId = int.Parse(roleIdClaim.Value),
+                            RoleId = int.Parse(roleClaim.Value),
                             //email = emailClaim?.Value,
                             //CompanyLogoURL = companyLogoClaim?.Value,
                             //LocationId = int.Parse(locationIdClaim.Value) 

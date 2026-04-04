@@ -20,16 +20,26 @@ namespace OCR_BACKEND.Controllers
         [HttpPost("InsertUpdateDocument")]
         public async Task<IActionResult> InsertUpdateDocument(DocumentRequest model)
         {
-            var id = await _service.InsertUpdateDocument(model);
-
-            if (id == 0)
-                return BadRequest(new { message = "Failed to save" });
-
-            return Ok(new
+            try
             {
-                message = model.DocumentId == 0 ? "Created Successfully" : "Updated Successfully",
-                DocumentId = id
-            });
+                var id = await _service.InsertUpdateDocument(model);
+                if (id == 0)
+                    return BadRequest(new { message = "Failed to save" });
+
+                return Ok(new
+                {
+                    message = model.DocumentId == 0 ? "Created Successfully" : "Updated Successfully",
+                    DocumentId = id
+                });
+            }
+            catch (Npgsql.PostgresException ex) when (ex.SqlState == "P0001")
+            {
+                return BadRequest(new { message = ex.MessageText });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { message = ex.Message });
+            }
         }
 
         [HttpGet("GetDocuments")]

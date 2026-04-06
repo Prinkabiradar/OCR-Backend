@@ -43,8 +43,8 @@ namespace OCR_BACKEND.Services
 
             var json = JsonSerializer.Serialize(body);
             var response = await _http.PostAsync(
-                $"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={apiKey}",
-               // $"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-pro:generateContent?key={apiKey}",
+              //$"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={apiKey}",
+             $"https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key={apiKey}",
             new StringContent(json, Encoding.UTF8, "application/json")
             );
             return await response.Content.ReadAsStringAsync();

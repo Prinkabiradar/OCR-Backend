@@ -35,7 +35,7 @@ namespace OCR_BACKEND.Services
             int startIndex,
             int pageSize)
         {
-            var keyword = ExtractKeyword(question);
+            var keyword = question;    //ExtractKeyword(question);
 
             var (pages, totalCount) = await _agentDBHelper.SearchDocumentPages(
                 keyword, startIndex, pageSize

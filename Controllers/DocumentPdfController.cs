@@ -1,22 +1,8 @@
-﻿using iText.IO.Font.Constants;
-using iText.Kernel.Colors;
-using iText.Kernel.Font;
-using iText.Kernel.Pdf;
-using iText.Layout;
-using iText.Layout.Element;
-using iText.Layout.Properties;
-using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Mvc;
 using OCR_BACKEND.Modals;
 using OCR_BACKEND.Services;
 using System.Data;
-using System.Data;
-using System.IO;
 using System.Security.Claims;
-using System.Security.Claims;
-using System.Threading.Tasks;
-using OCR_BACKEND.Services;
 
 namespace OCR_BACKEND.Controllers
 {
@@ -30,11 +16,6 @@ namespace OCR_BACKEND.Controllers
         {
             _service = service;
         }
-
-        /// <summary>
-        /// Generates a single PDF for a specific DocumentId.
-        /// GET /api/DocumentPdf/GeneratePdf?DocumentId=5
-        /// </summary>
         [HttpGet("GeneratePdf")]
         public async Task<IActionResult> GeneratePdfByDocumentId([FromQuery] OcrDocumentRequest request)
         {
@@ -71,7 +52,8 @@ namespace OCR_BACKEND.Controllers
                     return NotFound($"No pages found for DocumentId {request.DocumentId}.");
 
                 // ── Build PDF in memory ────────────────────────────────────
-                byte[] pdfBytes = DocumentPdfGenerator.Generate(response, request.DocumentId);
+                string documentName = response.Rows[0]["DocumentName"]?.ToString() ?? $"Document {request.DocumentId}";
+                byte[] pdfBytes = DocumentPdfGenerator.Generate(response, request.DocumentId, documentName);
 
                 string fileName = $"Document_{request.DocumentId}.pdf";
                 return File(pdfBytes, "application/pdf", fileName);
@@ -81,11 +63,6 @@ namespace OCR_BACKEND.Controllers
                 return BadRequest(new { message = ex.Message });
             }
         }
-
-        /// <summary>
-        /// Generates one PDF per DocumentId found in the data and returns them as a ZIP.
-        /// GET /api/DocumentPdf/GenerateAllPdfs
-        /// </summary>
         [HttpGet("GenerateAllPdfs")]
         public async Task<IActionResult> GenerateAllPdfs([FromQuery] OcrDocumentRequest request)
         {
@@ -129,7 +106,8 @@ namespace OCR_BACKEND.Controllers
                         foreach (var row in group)
                             docTable.ImportRow(row);
 
-                        byte[] pdfBytes = DocumentPdfGenerator.Generate(docTable, documentId);
+                        string documentName = docTable.Rows[0]["DocumentName"]?.ToString() ?? $"Document {documentId}";
+                        byte[] pdfBytes = DocumentPdfGenerator.Generate(docTable, documentId, documentName);
 
                         var entry = archive.CreateEntry(
                             $"Document_{documentId}.pdf",

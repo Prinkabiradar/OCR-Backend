@@ -19,16 +19,26 @@ namespace OCR_BACKEND.Controllers
         [HttpPost("InsertUpdateDocumentType")]
         public async Task<IActionResult> InsertUpdateDocumentType(DocumentTypeRequest model)
         {
-            var id = await _service.InsertUpdateDocumentType(model);
-
-            if (id == 0)
-                return BadRequest(new { message = "Failed to save" });
-
-            return Ok(new
+            try
             {
-                message = model.DocumentTypeId == 0 ? "Created Successfully" : "Updated Successfully",
-                DocumentTypeId = id
-            });
+                var id = await _service.InsertUpdateDocumentType(model);
+                if (id == 0)
+                    return BadRequest(new { message = "Failed to save" });
+
+                return Ok(new
+                {
+                    message = model.DocumentTypeId == 0 ? "Created Successfully" : "Updated Successfully",
+                    DocumentTypeId = id
+                });
+            }
+            catch (Npgsql.PostgresException ex) when (ex.SqlState == "P0001")
+            {
+                return BadRequest(new { message = ex.MessageText });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { message = ex.Message });
+            }
         }
 
         [HttpGet("GetDocumentType")]

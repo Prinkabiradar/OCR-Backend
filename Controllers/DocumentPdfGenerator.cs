@@ -57,19 +57,25 @@ namespace OCR_BACKEND.Controllers
                             );
 
                             col.Item()
-                                .PaddingBottom(12)
-                                .Border(1)
-                                .BorderColor(Colors.Grey.Lighten2)
+                                .PaddingBottom(20)
                                 .Column(inner =>
                                 {
+                                    // Page label — plain text, no background box
                                     inner.Item()
-                                        .Background(Colors.Blue.Lighten3)
-                                        .Padding(6)
+                                        .PaddingBottom(4)
                                         .Text($"Page {pageNumber}")
-                                        .Bold().FontSize(11);
+                                        .Bold()
+                                        .FontSize(11)
+                                        .FontColor(Colors.Grey.Medium);
 
+                                    // Thin separator under the label
                                     inner.Item()
-                                        .Padding(10)
+                                        .PaddingBottom(8)
+                                        .LineHorizontal(0.5f)
+                                        .LineColor(Colors.Grey.Lighten2);
+
+                                    // Extracted text — no border, no background
+                                    inner.Item()
                                         .Text(extractedText)
                                         .FontSize(10)
                                         .LineHeight(1.5f);

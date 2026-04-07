@@ -85,7 +85,8 @@ builder.Services.AddCors(options =>
             .WithOrigins(
                 "http://localhost:4200",            
                 "https://localhost:4200",           
-                "https://tts.sharpflux.com"         
+                "https://tts.sharpflux.com",
+                "https://ocr.sharpflux.com"
             )
             .AllowAnyHeader()
             .AllowAnyMethod()
@@ -102,9 +103,10 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
+
 app.UseHttpsRedirection();
+app.UseRouting();
 app.UseCors("AllowAngular");
-app.UseRouting();                
 app.UseAuthentication();
 app.UseAuthorization();
 

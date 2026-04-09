@@ -56,6 +56,12 @@ builder.Services.AddSingleton<OcrJobDBHelper>();
 builder.Services.AddScoped<IOcrJobService, OcrJobService>();
 builder.Services.AddHostedService<OcrWorkerService>();
 builder.Services.AddScoped<IFileConversionService, FileConversionService>();
+builder.Services.AddSingleton<IPdfToImageService, PdfToImageService>();
+
+builder.Services.AddHttpClient<GeminiService>(client =>
+{
+    client.Timeout = TimeSpan.FromMinutes(10);
+});
 
 builder.Services.AddScoped<IRoleAccessService, RoleAccessService>();
 builder.Services.AddScoped<RoleAccessDBHelper>();
@@ -103,10 +109,10 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-
+app.UseCors("AllowAngular");
 app.UseHttpsRedirection();
 app.UseRouting();
-app.UseCors("AllowAngular");
+
 app.UseAuthentication();
 app.UseAuthorization();
 

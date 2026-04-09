@@ -37,14 +37,31 @@ namespace OCR_BACKEND.Controllers
 
             return Ok(result);
         }
+        //[HttpPost("summarize")]
+        //public async Task<IActionResult> Summarize([FromBody] AgentRequest request)
+        //{
+        //    if (string.IsNullOrWhiteSpace(request.Question))
+        //        return BadRequest(new { message = "Document name is required." });
+
+        //    var summary = await _service.Summarize(request.Question);
+        //    return Ok(new { summary });
+        //}
+
         [HttpPost("summarize")]
         public async Task<IActionResult> Summarize([FromBody] AgentRequest request)
         {
-            if (string.IsNullOrWhiteSpace(request.Question))
-                return BadRequest(new { message = "Document name is required." });
+            try
+            {
+                if (string.IsNullOrWhiteSpace(request.Question))
+                    return BadRequest(new { message = "Document name is required." });
 
-            var summary = await _service.Summarize(request.Question);
-            return Ok(new { summary });
+                var summary = await _service.Summarize(request.Question);
+                return Ok(new { summary });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { message = ex.Message });  
+            }
         }
 
         [HttpPost("save-summary")]

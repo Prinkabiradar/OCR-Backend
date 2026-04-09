@@ -1,4 +1,4 @@
-﻿// Services/OcrJobDBHelper.cs
+﻿ 
 using Npgsql;
 using NpgsqlTypes;
 using OCR_BACKEND.Modals;
@@ -100,24 +100,34 @@ namespace OCR_BACKEND.Services
         {
             if (results.Count == 0) return;
 
-            // Use PostgreSQL COPY for high-performance bulk insert
             using var conn = _sqlDBHelper.CreateConnection();
             await conn.OpenAsync();
 
             await using var writer = await conn.BeginBinaryImportAsync(
-                "COPY ocr_job_results (job_id, file_name, ocr_text, success, error) FROM STDIN (FORMAT BINARY)");
+                "COPY ocr_job_results (job_id, file_name, file_path, ocr_text, success, error) FROM STDIN (FORMAT BINARY)");
 
             foreach (var r in results)
             {
                 await writer.StartRowAsync();
+
+                // 1. job_id
                 await writer.WriteAsync(r.JobId, NpgsqlDbType.Uuid);
+
+                // 2. file_name
                 await writer.WriteAsync(r.FileName, NpgsqlDbType.Text);
 
+                // 3. file_path
+                if (r.FilePath is null) await writer.WriteNullAsync();
+                else await writer.WriteAsync(r.FilePath, NpgsqlDbType.Text);
+
+                // 4. ocr_text
                 if (r.OcrText is null) await writer.WriteNullAsync();
                 else await writer.WriteAsync(r.OcrText, NpgsqlDbType.Text);
 
+                // 5. success
                 await writer.WriteAsync(r.Success, NpgsqlDbType.Boolean);
 
+                // 6. error
                 if (r.Error is null) await writer.WriteNullAsync();
                 else await writer.WriteAsync(r.Error, NpgsqlDbType.Text);
             }

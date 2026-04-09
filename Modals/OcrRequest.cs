@@ -40,8 +40,9 @@ namespace OCR_BACKEND.Modals
         public string? OcrText { get; set; }
         public bool Success { get; set; }
         public string? Error { get; set; }
+        public string? FilePath { get; set; }
     }
 
     // Internal use — passed to background worker via Channel
-    public record OcrJobQueueItem(Guid JobId, List<string> FilePaths);
+    public record OcrJobQueueItem(Guid JobId, List<string> FilePaths, Dictionary<string, string> SourceFileMap);
 }

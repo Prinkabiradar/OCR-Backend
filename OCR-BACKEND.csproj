@@ -7,11 +7,17 @@
     <RootNamespace>OCR_BACKEND</RootNamespace>
   </PropertyGroup>
 
-  <ItemGroup>
-    <PackageReference Include="BCrypt.Net-Next" Version="4.0.3" />
-    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="8.0.23" />
-    <PackageReference Include="Npgsql" Version="10.0.1" />
-    <PackageReference Include="Swashbuckle.AspNetCore" Version="6.6.2" />
-  </ItemGroup>
+<ItemGroup>
+  <PackageReference Include="BCrypt.Net-Next" Version="4.0.3" />
+  <PackageReference Include="itext" Version="9.6.0" />
+  <PackageReference Include="itext.bouncy-castle-adapter" Version="9.6.0" />
+  <PackageReference Include="Magick.NET-Q16-AnyCPU" Version="14.11.1" />
+  <PackageReference Include="MailKit" Version="4.15.1" />
+  <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="8.0.23" />
+  <PackageReference Include="Npgsql" Version="10.0.1" />
+  <PackageReference Include="PDFtoImage" Version="5.2.1" />
+  <PackageReference Include="QuestPDF" Version="2026.2.4" />
+  <PackageReference Include="Swashbuckle.AspNetCore" Version="6.6.2" />
+</ItemGroup>
 
 </Project>

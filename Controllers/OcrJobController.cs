@@ -105,5 +105,43 @@ namespace OCR_BACKEND.Controllers
                 return BadRequest(new { message = ex.Message });
             }
         }
+
+        [HttpPost("RetryResult")]
+        public async Task<IActionResult> RetryResult(
+            [FromBody] RetryOcrResultRequest request,
+            CancellationToken ct)
+        {
+            try
+            {
+                if (request.JobId == Guid.Empty || string.IsNullOrWhiteSpace(request.FileName))
+                    return BadRequest(new { message = "JobId and FileName are required." });
+
+                var result = await _service.RetryResult(request.JobId, request.FileName, ct);
+                return Ok(result);
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { message = ex.Message });
+            }
+        }
+
+        [HttpPost("CancelJob")]
+        public async Task<IActionResult> CancelJob(
+            [FromBody] CancelOcrJobRequest request,
+            CancellationToken ct)
+        {
+            try
+            {
+                if (request.JobId == Guid.Empty)
+                    return BadRequest(new { message = "JobId is required." });
+
+                await _service.CancelJob(request.JobId, ct);
+                return Ok(new { message = "Job cancelled successfully." });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { message = ex.Message });
+            }
+        }
     }
 }

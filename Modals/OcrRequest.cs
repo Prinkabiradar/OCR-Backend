@@ -21,6 +21,17 @@ namespace OCR_BACKEND.Modals
         public string? SearchCriteria { get; set; }
     }
 
+    public class RetryOcrResultRequest
+    {
+        public Guid JobId { get; set; }
+        public string FileName { get; set; } = "";
+    }
+
+    public class CancelOcrJobRequest
+    {
+        public Guid JobId { get; set; }
+    }
+
     public class OcrJob
     {
         public Guid JobId { get; set; }
@@ -44,5 +55,12 @@ namespace OCR_BACKEND.Modals
     }
 
     // Internal use — passed to background worker via Channel
-    public record OcrJobQueueItem(Guid JobId, List<string> FilePaths, Dictionary<string, string> SourceFileMap);
+    public record OcrJobPageReference(int PageNumber, string FileName);
+
+    public record OcrJobWorkItem(
+        string FilePath,
+        string OriginalSourcePath,
+        List<OcrJobPageReference> Pages);
+
+    public record OcrJobQueueItem(Guid JobId, List<OcrJobWorkItem> Items);
 }

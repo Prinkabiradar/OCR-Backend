@@ -29,32 +29,38 @@ namespace OCR_BACKEND.Modals
         [JsonPropertyName("TotalDocuments")]
         public long TotalDocuments { get; set; }
 
-        [JsonPropertyName("TotalPagesScanned")]
-        public long TotalPagesScanned { get; set; }
+        [JsonPropertyName("PendingDocuments")]
+        public long PendingDocuments { get; set; }
 
-        [JsonPropertyName("AISummaries")]
-        public long AISummaries { get; set; }
+        [JsonPropertyName("CheckedDocuments")]
+        public long CheckedDocuments { get; set; }
+
+        [JsonPropertyName("PartiallyChecked")]
+        public long PartiallyChecked { get; set; }
+
+        [JsonPropertyName("VerifiedDocuments")]
+        public long VerifiedDocuments { get; set; }
+
+        [JsonPropertyName("PartiallyVerified")]
+        public long PartiallyVerified { get; set; }
+
+        [JsonPropertyName("ApprovedDocuments")]
+        public long ApprovedDocuments { get; set; }
+
+        [JsonPropertyName("PartiallyApproved")]
+        public long PartiallyApproved { get; set; }
+
+        [JsonPropertyName("RejectedDocuments")]
+        public long RejectedDocuments { get; set; }
+
+        [JsonPropertyName("SuggestionDocuments")]
+        public long SuggestionDocuments { get; set; }
 
         [JsonPropertyName("DocumentTypes")]
         public long DocumentTypes { get; set; }
 
-        [JsonPropertyName("LanguagesSupported")]
-        public long LanguagesSupported { get; set; }
-
-        [JsonPropertyName("TodayUploads")]
-        public long TodayUploads { get; set; }
-
-        [JsonPropertyName("TodaySummaries")]
-        public long TodaySummaries { get; set; }
-
-        [JsonPropertyName("ThisMonthDocuments")]
-        public long ThisMonthDocuments { get; set; }
-
-        [JsonPropertyName("ThisWeekPages")]
-        public long ThisWeekPages { get; set; }
-
-        [JsonPropertyName("TodayUploadsChange")]
-        public long TodayUploadsChange { get; set; }
+        [JsonPropertyName("TotalPagesScanned")]
+        public long TotalPagesScanned { get; set; }
     }
 
     // ── SP2 : recentDocs ──────────────────────────────────────────────────────

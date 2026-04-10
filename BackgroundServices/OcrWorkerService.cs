@@ -1,21 +1,17 @@
 ﻿using OCR_BACKEND.Modals;
 using OCR_BACKEND.Queue;
 using OCR_BACKEND.Services;
+using System.Text.Json;
+using System.Threading.Channels;
 
 namespace OCR_BACKEND.BackgroundServices
 {
     public class OcrWorkerService : BackgroundService
     {
-        // ── Tuning knobs ─────────────────────────────────────────────────────
-        private const int MaxParallelChunks = 5;   // was 3 — Gemini Flash handles this easily
-        private const int MaxRetries = 7;
-        private const int RetryBaseDelayMs = 5000;
-        private const int MaxRetryDelayMs = 60_000;
-        private const int StaggerDelayMs = 500;
-
         private readonly OcrJobQueue _ocrJobQueue;
         private readonly OcrJobDBHelper _ocrJobDBHelper;
         private readonly GeminiService _gemini;
+        private readonly OcrJobCancellationRegistry _cancellationRegistry;
         private readonly ILogger<OcrWorkerService> _logger;
         private readonly IConfiguration _config;
 
@@ -23,12 +19,14 @@ namespace OCR_BACKEND.BackgroundServices
             OcrJobQueue ocrJobQueue,
             OcrJobDBHelper ocrJobDBHelper,
             GeminiService gemini,
+            OcrJobCancellationRegistry cancellationRegistry,
             ILogger<OcrWorkerService> logger,
             IConfiguration config)
         {
             _ocrJobQueue = ocrJobQueue;
             _ocrJobDBHelper = ocrJobDBHelper;
             _gemini = gemini;
+            _cancellationRegistry = cancellationRegistry;
             _logger = logger;
             _config = config;
         }
@@ -37,69 +35,108 @@ namespace OCR_BACKEND.BackgroundServices
         {
             await foreach (var item in _ocrJobQueue.ReadAllAsync(stoppingToken))
             {
-                // Fire-and-forget — each job runs independently
-                _ = ProcessJobAsync(item, stoppingToken);
+                _ = Task.Run(async () =>
+                {
+                    using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
+                        stoppingToken,
+                        _cancellationRegistry.GetToken(item.JobId));
+
+                    try
+                    {
+                        await ProcessJobAsync(item, linkedCts.Token);
+                    }
+                    finally
+                    {
+                        _cancellationRegistry.Release(item.JobId);
+                    }
+                }, stoppingToken);
             }
         }
 
-        // ────────────────────────────────────────────────────────────────────
         private async Task ProcessJobAsync(OcrJobQueueItem item, CancellationToken ct)
         {
-            _logger.LogInformation("Job {JobId} started — {Count} chunk(s)",
-                item.JobId, item.FilePaths.Count);
+            ct.ThrowIfCancellationRequested();
+
+            var totalPages = item.Items.Sum(GetWorkItemPageCount);
+
+            _logger.LogInformation(
+                "Job {JobId} started with {ChunkCount} work item(s) covering {PageCount} page(s)",
+                item.JobId,
+                item.Items.Count,
+                totalPages);
 
             await _ocrJobDBHelper.UpdateJobStatus(item.JobId, "Processing", 0);
 
             try
             {
                 var storageRoot = Path.GetFullPath(_config["FileStorage:Root"] ?? "uploads");
-                var semaphore = new SemaphoreSlim(MaxParallelChunks);
+                var insertBatchSize = Math.Max(1, _config.GetValue("Ocr:InsertBatchSize", 10));
+                var resultChannel = Channel.CreateUnbounded<List<OcrJobResult>>();
 
-                // ── Launch all chunks in parallel, capped by semaphore ────────
-                var tasks = new List<Task<OcrJobResult>>();
-                foreach (var filePath in item.FilePaths)
+                var producer = Task.Run(async () =>
                 {
-                    await Task.Delay(StaggerDelayMs, ct); // stagger each launch by 500ms
-                    tasks.Add(Task.Run(async () =>
+                    try
                     {
-                        await semaphore.WaitAsync(ct);
-                        try
+                        var launchIndex = 0;
+                        var options = new ParallelOptions
                         {
-                            var originalPath = item.SourceFileMap.TryGetValue(filePath, out var src) ? src : filePath;
-                            return await ProcessFileWithRetryAsync(
-                                item.JobId, filePath, originalPath,
-                                Path.GetFullPath(_config["FileStorage:Root"] ?? "uploads"), ct);
-                        }
-                        finally { semaphore.Release(); }
-                    }, ct));
-                }
+                            MaxDegreeOfParallelism = Math.Max(1, _config.GetValue("Ocr:MaxParallelChunks", 5)),
+                            CancellationToken = ct
+                        };
 
-                var results = await Task.WhenAll(tasks);
+                        await Parallel.ForEachAsync(item.Items, options, async (workItem, token) =>
+                        {
+                            var staggerDelayMs = Math.Max(0, _config.GetValue("Ocr:StaggerDelayMs", 200));
+                            var currentIndex = Interlocked.Increment(ref launchIndex);
+                            if (staggerDelayMs > 0 && currentIndex > 1)
+                                await Task.Delay(staggerDelayMs, token);
 
-                // ── Bulk-insert in batches of 5, update progress after each ──
-                int processedCount = 0;
-                var batch = new List<OcrJobResult>();
+                            var results = await ProcessWorkItemWithRetryAsync(
+                                item.JobId,
+                                workItem,
+                                storageRoot,
+                                token);
 
-                foreach (var result in results)
+                            await resultChannel.Writer.WriteAsync(results, token);
+                        });
+
+                        resultChannel.Writer.TryComplete();
+                    }
+                    catch (Exception ex)
+                    {
+                        resultChannel.Writer.TryComplete(ex);
+                    }
+                }, ct);
+
+                var processedCount = 0;
+                var batch = new List<OcrJobResult>(insertBatchSize);
+
+                await foreach (var resultSet in resultChannel.Reader.ReadAllAsync(ct))
                 {
-                    batch.Add(result);
-                    processedCount++;
+                    batch.AddRange(resultSet);
+                    processedCount += resultSet.Count;
 
-                    if (batch.Count >= 5 || processedCount == results.Length)
+                    if (batch.Count >= insertBatchSize)
                     {
                         await _ocrJobDBHelper.BulkInsertJobResults(batch);
                         batch.Clear();
-
-                        await _ocrJobDBHelper.UpdateJobStatus(
-                            item.JobId, "Processing", processedCount);
-
-                        _logger.LogInformation("Job {JobId} — {Done}/{Total} done",
-                            item.JobId, processedCount, results.Length);
                     }
+
+                    await _ocrJobDBHelper.UpdateJobStatus(item.JobId, "Processing", processedCount);
+
+                    _logger.LogInformation(
+                        "Job {JobId} progress: {Done}/{Total} page(s)",
+                        item.JobId,
+                        processedCount,
+                        totalPages);
                 }
 
-                await _ocrJobDBHelper.UpdateJobStatus(
-                    item.JobId, "Completed", results.Length);
+                await producer;
+
+                if (batch.Count > 0)
+                    await _ocrJobDBHelper.BulkInsertJobResults(batch);
+
+                await _ocrJobDBHelper.UpdateJobStatus(item.JobId, "Completed", processedCount);
 
                 CleanupConvertedDirectory(item);
 
@@ -117,91 +154,259 @@ namespace OCR_BACKEND.BackgroundServices
             }
         }
 
-        // ────────────────────────────────────────────────────────────────────
-        private async Task<OcrJobResult> ProcessFileWithRetryAsync(
+        private async Task<List<OcrJobResult>> ProcessWorkItemWithRetryAsync(
             Guid jobId,
-            string filePath,
-            string originalSourcePath,
+            OcrJobWorkItem workItem,
             string storageRoot,
             CancellationToken ct)
         {
-            var fileName = Path.GetFileName(filePath);
+            var fileName = Path.GetFileName(workItem.FilePath);
+            var maxRetries = Math.Max(1, _config.GetValue("Ocr:MaxRetries", 7));
+            var retryBaseDelayMs = Math.Max(250, _config.GetValue("Ocr:RetryBaseDelayMs", 5000));
+            var maxRetryDelayMs = Math.Max(retryBaseDelayMs, _config.GetValue("Ocr:MaxRetryDelayMs", 60_000));
 
-            for (int attempt = 1; attempt <= MaxRetries; attempt++)
+            for (var attempt = 1; attempt <= maxRetries; attempt++)
             {
                 try
                 {
-                    var bytes = await File.ReadAllBytesAsync(filePath, ct);
-                    var contentType = ResolveContentType(filePath);
-
-                    // ✅ Uses the new unified method name
+                    var bytes = await File.ReadAllBytesAsync(workItem.FilePath, ct);
+                    var contentType = ResolveContentType(workItem.FilePath);
                     var ocrText = await _gemini.ExtractTextFromFileBytes(bytes, contentType);
 
                     if (IsRetryableResponse(ocrText))
                     {
-                        _logger.LogWarning("File {File} got 503 (attempt {A}/{Max})",
-                            fileName, attempt, MaxRetries);
+                        _logger.LogWarning(
+                            "Work item {File} got a retryable Gemini response (attempt {Attempt}/{Max})",
+                            fileName,
+                            attempt,
+                            maxRetries);
 
-                        if (attempt == MaxRetries) break;
+                        if (attempt == maxRetries)
+                            break;
 
-                        var baseDelay = RetryBaseDelayMs * (int)Math.Pow(2, attempt - 1);
-                        var jitter = Random.Shared.Next(0, 2000); // 0–2s random jitter
-                        var delay = Math.Min(baseDelay + jitter, MaxRetryDelayMs);
-                        _logger.LogWarning("Retrying {File} in {Delay}ms (attempt {A}/{Max})", fileName, delay, attempt, MaxRetries);
+                        var delay = GetRetryDelayMs(attempt, retryBaseDelayMs, maxRetryDelayMs);
                         await Task.Delay(delay, ct);
                         continue;
                     }
 
-                    return new OcrJobResult
-                    {
-                        JobId = jobId,
-                        FileName = Path.GetFileName(originalSourcePath),
-                        OcrText = ocrText,
-                        Success = true,
-                        FilePath = Path.GetRelativePath(
-                            storageRoot,
-                            Path.GetFullPath(originalSourcePath))
-                    };
+                    return await BuildSuccessResultsAsync(jobId, workItem, storageRoot, ocrText, ct);
                 }
-                catch (Exception ex) when (attempt < MaxRetries)
+                catch (Exception ex) when (attempt < maxRetries)
                 {
-                    _logger.LogWarning("File {File} error (attempt {A}): {Msg}",
-                        fileName, attempt, ex.Message);
+                    _logger.LogWarning(
+                        "Work item {File} failed on attempt {Attempt}/{Max}: {Message}",
+                        fileName,
+                        attempt,
+                        maxRetries,
+                        ex.Message);
 
-                    var delay = Math.Min(RetryBaseDelayMs * (int)Math.Pow(2, attempt - 1), MaxRetryDelayMs);
+                    var delay = GetRetryDelayMs(attempt, retryBaseDelayMs, maxRetryDelayMs);
                     await Task.Delay(delay, ct);
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError("File {File} failed after {Max} attempts: {Msg}",
-                        fileName, MaxRetries, ex.Message);
+                    _logger.LogError(
+                        "Work item {File} failed after {Max} attempts: {Message}",
+                        fileName,
+                        maxRetries,
+                        ex.Message);
 
-                    return new OcrJobResult
-                    {
-                        JobId = jobId,
-                        FileName = fileName,
-                        Success = false,
-                        Error = ex.Message
-                    };
+                    return BuildFailureResults(jobId, workItem, storageRoot, ex.Message);
                 }
             }
 
-            return new OcrJobResult
-            {
-                JobId = jobId,
-                FileName = fileName,
-                Success = false,
-                Error = "Gemini returned 503 after all retries"
-            };
+            return BuildFailureResults(
+                jobId,
+                workItem,
+                storageRoot,
+                "Gemini returned retryable errors after all retry attempts.");
         }
 
-        // ────────────────────────────────────────────────────────────────────
+        private async Task<List<OcrJobResult>> BuildSuccessResultsAsync(
+            Guid jobId,
+            OcrJobWorkItem workItem,
+            string storageRoot,
+            string rawResponse,
+            CancellationToken ct)
+        {
+            var relativePath = Path.GetRelativePath(
+                storageRoot,
+                Path.GetFullPath(workItem.OriginalSourcePath));
+
+            if (GetWorkItemPageCount(workItem) == 1)
+            {
+                var page = workItem.Pages.FirstOrDefault()
+                    ?? new OcrJobPageReference(1, Path.GetFileName(workItem.OriginalSourcePath));
+                var normalizedResponse = NormalizeSinglePageResponse(rawResponse);
+
+                return new List<OcrJobResult>
+                {
+                    new()
+                    {
+                        JobId = jobId,
+                        FileName = page.FileName,
+                        OcrText = normalizedResponse,
+                        Success = true,
+                        FilePath = relativePath
+                    }
+                };
+            }
+
+            if (!TryParseMultiPageGeminiResponse(rawResponse, out var pagePayloads, out var parseError))
+            {
+                _logger.LogWarning(
+                    "Could not parse multi-page Gemini response for {File}: {Error}. Falling back to single-page OCR.",
+                    workItem.FilePath,
+                    parseError);
+
+                return await ReprocessPagesIndividuallyAsync(jobId, workItem, storageRoot, ct);
+            }
+
+            var payloadByPage = new Dictionary<int, JsonElement>();
+            for (var i = 0; i < pagePayloads.Count; i++)
+            {
+                var payload = pagePayloads[i];
+                if (payload.TryGetProperty("page", out var pageProperty) &&
+                    pageProperty.ValueKind == JsonValueKind.Number &&
+                    pageProperty.TryGetInt32(out var parsedPageNumber))
+                {
+                    payloadByPage[parsedPageNumber] = payload;
+                }
+            }
+
+            var results = new List<OcrJobResult>(workItem.Pages.Count);
+            for (var i = 0; i < workItem.Pages.Count; i++)
+            {
+                var page = workItem.Pages[i];
+                JsonElement payload;
+
+                if (!payloadByPage.TryGetValue(page.PageNumber, out payload))
+                {
+                    if (i < pagePayloads.Count)
+                        payload = pagePayloads[i];
+                    else
+                    {
+                        results.Add(new OcrJobResult
+                        {
+                            JobId = jobId,
+                            FileName = page.FileName,
+                            Success = false,
+                            Error = $"Gemini did not return OCR output for page {page.PageNumber}.",
+                            FilePath = relativePath
+                        });
+                        continue;
+                    }
+                }
+
+                results.Add(new OcrJobResult
+                {
+                    JobId = jobId,
+                    FileName = page.FileName,
+                    OcrText = WrapPayloadAsGeminiResponse(payload),
+                    Success = true,
+                    FilePath = relativePath
+                });
+            }
+
+            return results;
+        }
+
+        private async Task<List<OcrJobResult>> ReprocessPagesIndividuallyAsync(
+            Guid jobId,
+            OcrJobWorkItem workItem,
+            string storageRoot,
+            CancellationToken ct)
+        {
+            var relativePath = Path.GetRelativePath(
+                storageRoot,
+                Path.GetFullPath(workItem.OriginalSourcePath));
+
+            var results = new List<OcrJobResult>(workItem.Pages.Count);
+
+            for (var index = 0; index < workItem.Pages.Count; index++)
+            {
+                var page = workItem.Pages[index];
+                var pageLabel = $"{Path.GetFileName(workItem.FilePath)} page {page.PageNumber}";
+                var pageBytes = ExtractSinglePagePdfBytes(workItem.FilePath, index + 1);
+                var pageResponse = await ExecuteGeminiWithRetryAsync(
+                    () => _gemini.ExtractTextFromFileBytes(pageBytes, "application/pdf"),
+                    pageLabel,
+                    ct);
+
+                if (pageResponse is null)
+                {
+                    results.Add(new OcrJobResult
+                    {
+                        JobId = jobId,
+                        FileName = page.FileName,
+                        Success = false,
+                        Error = "Gemini returned retryable errors after all retry attempts.",
+                        FilePath = relativePath
+                    });
+                    continue;
+                }
+
+                results.Add(new OcrJobResult
+                {
+                    JobId = jobId,
+                    FileName = page.FileName,
+                    OcrText = NormalizeSinglePageResponse(pageResponse),
+                    Success = true,
+                    FilePath = relativePath
+                });
+            }
+
+            return results;
+        }
+
+        private List<OcrJobResult> BuildFailureResults(
+            Guid jobId,
+            OcrJobWorkItem workItem,
+            string storageRoot,
+            string error)
+        {
+            var relativePath = Path.GetRelativePath(
+                storageRoot,
+                Path.GetFullPath(workItem.OriginalSourcePath));
+
+            if (workItem.Pages.Count == 0)
+            {
+                return new List<OcrJobResult>
+                {
+                    new()
+                    {
+                        JobId = jobId,
+                        FileName = Path.GetFileName(workItem.OriginalSourcePath),
+                        Success = false,
+                        Error = error,
+                        FilePath = relativePath
+                    }
+                };
+            }
+
+            return workItem.Pages
+                .Select(page => new OcrJobResult
+                {
+                    JobId = jobId,
+                    FileName = page.FileName,
+                    Success = false,
+                    Error = error,
+                    FilePath = relativePath
+                })
+                .ToList();
+        }
+
         private void CleanupConvertedDirectory(OcrJobQueueItem item)
         {
             try
             {
-                var dir = Path.GetDirectoryName(item.FilePaths[0]);
-                if (dir is null) return;
+                var firstWorkItem = item.Items.FirstOrDefault();
+                if (firstWorkItem is null)
+                    return;
+
+                var dir = Path.GetDirectoryName(firstWorkItem.FilePath);
+                if (dir is null)
+                    return;
 
                 if (Path.GetFileName(dir).Equals("converted", StringComparison.OrdinalIgnoreCase)
                     && Directory.Exists(dir))
@@ -212,16 +417,204 @@ namespace OCR_BACKEND.BackgroundServices
             }
             catch (Exception ex)
             {
-                _logger.LogWarning("Cleanup failed for job {JobId}: {Msg}", item.JobId, ex.Message);
+                _logger.LogWarning("Cleanup failed for job {JobId}: {Message}", item.JobId, ex.Message);
             }
         }
 
-        private static bool IsRetryableResponse(string json)
-      => json.Contains("\"code\": 503") || json.Contains("\"code\":503")
-      || json.Contains("\"code\": 429") || json.Contains("\"code\":429")
-      || json.Contains("overloaded")
-      || json.Contains("RESOURCE_EXHAUSTED")
-      || json.Contains("rate limit", StringComparison.OrdinalIgnoreCase);
+        private static int GetWorkItemPageCount(OcrJobWorkItem item)
+            => item.Pages.Count == 0 ? 1 : item.Pages.Count;
+
+        private async Task<string?> ExecuteGeminiWithRetryAsync(
+            Func<Task<string>> operation,
+            string fileName,
+            CancellationToken ct)
+        {
+            var maxRetries = Math.Max(1, _config.GetValue("Ocr:MaxRetries", 7));
+            var retryBaseDelayMs = Math.Max(250, _config.GetValue("Ocr:RetryBaseDelayMs", 5000));
+            var maxRetryDelayMs = Math.Max(retryBaseDelayMs, _config.GetValue("Ocr:MaxRetryDelayMs", 60_000));
+
+            for (var attempt = 1; attempt <= maxRetries; attempt++)
+            {
+                try
+                {
+                    var response = await operation();
+                    if (IsRetryableResponse(response))
+                    {
+                        _logger.LogWarning(
+                            "Work item {File} got a retryable Gemini response (attempt {Attempt}/{Max})",
+                            fileName,
+                            attempt,
+                            maxRetries);
+
+                        if (attempt == maxRetries)
+                            return null;
+
+                        await Task.Delay(GetRetryDelayMs(attempt, retryBaseDelayMs, maxRetryDelayMs), ct);
+                        continue;
+                    }
+
+                    return response;
+                }
+                catch (Exception ex) when (attempt < maxRetries)
+                {
+                    _logger.LogWarning(
+                        "Work item {File} failed on attempt {Attempt}/{Max}: {Message}",
+                        fileName,
+                        attempt,
+                        maxRetries,
+                        ex.Message);
+
+                    await Task.Delay(GetRetryDelayMs(attempt, retryBaseDelayMs, maxRetryDelayMs), ct);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(
+                        "Work item {File} failed after {Max} attempts: {Message}",
+                        fileName,
+                        maxRetries,
+                        ex.Message);
+                    return null;
+                }
+            }
+
+            return null;
+        }
+
+        private static int GetRetryDelayMs(int attempt, int retryBaseDelayMs, int maxRetryDelayMs)
+        {
+            var exponential = retryBaseDelayMs * (int)Math.Pow(2, attempt - 1);
+            var jitter = Random.Shared.Next(0, 2000);
+            return Math.Min(exponential + jitter, maxRetryDelayMs);
+        }
+
+        private static byte[] ExtractSinglePagePdfBytes(string pdfPath, int pageNumber)
+        {
+            using var output = new MemoryStream();
+            using var reader = new iText.Kernel.Pdf.PdfReader(pdfPath);
+            using var writer = new iText.Kernel.Pdf.PdfWriter(output);
+            using var source = new iText.Kernel.Pdf.PdfDocument(reader);
+            using var target = new iText.Kernel.Pdf.PdfDocument(writer);
+
+            source.CopyPagesTo(new List<int> { pageNumber }, target);
+            target.Close();
+
+            return output.ToArray();
+        }
+
+        private static bool TryParseMultiPageGeminiResponse(
+            string rawResponse,
+            out List<JsonElement> pagePayloads,
+            out string? error)
+        {
+            pagePayloads = new List<JsonElement>();
+            error = null;
+
+            try
+            {
+                using var responseDocument = JsonDocument.Parse(rawResponse);
+                if (!responseDocument.RootElement.TryGetProperty("candidates", out var candidates) ||
+                    candidates.ValueKind != JsonValueKind.Array ||
+                    candidates.GetArrayLength() == 0)
+                {
+                    error = "Gemini response did not contain candidates.";
+                    return false;
+                }
+
+                var parts = candidates[0].GetProperty("content").GetProperty("parts");
+                var textPart = parts.EnumerateArray()
+                    .FirstOrDefault(part => part.TryGetProperty("text", out _));
+
+                if (textPart.ValueKind != JsonValueKind.Object ||
+                    !textPart.TryGetProperty("text", out var textElement))
+                {
+                    error = "Gemini response did not contain OCR text.";
+                    return false;
+                }
+
+                var candidateText = StripJsonCodeFences(textElement.GetString() ?? string.Empty);
+                using var payloadDocument = JsonDocument.Parse(candidateText);
+                if (payloadDocument.RootElement.ValueKind != JsonValueKind.Array)
+                {
+                    error = "Expected a JSON array for multi-page OCR output.";
+                    return false;
+                }
+
+                pagePayloads = payloadDocument.RootElement
+                    .EnumerateArray()
+                    .Select(element => element.Clone())
+                    .ToList();
+
+                if (pagePayloads.Count == 0)
+                {
+                    error = "Gemini returned an empty page array.";
+                    return false;
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+                return false;
+            }
+        }
+
+        private static string StripJsonCodeFences(string value)
+        {
+            var trimmed = value.Trim();
+            if (!trimmed.StartsWith("```", StringComparison.Ordinal))
+                return trimmed;
+
+            var lines = trimmed.Split('\n').ToList();
+            if (lines.Count > 0 && lines[0].StartsWith("```", StringComparison.Ordinal))
+                lines.RemoveAt(0);
+            if (lines.Count > 0 && lines[^1].Trim().Equals("```", StringComparison.Ordinal))
+                lines.RemoveAt(lines.Count - 1);
+
+            return string.Join('\n', lines).Trim();
+        }
+
+        private static string NormalizeSinglePageResponse(string rawResponse)
+        {
+            if (!TryParseMultiPageGeminiResponse(rawResponse, out var pagePayloads, out _) || pagePayloads.Count == 0)
+                return rawResponse;
+
+            return WrapPayloadAsGeminiResponse(pagePayloads[0]);
+        }
+
+        private static string WrapPayloadAsGeminiResponse(JsonElement payload)
+        {
+            var structured = payload.GetRawText();
+
+            return JsonSerializer.Serialize(new
+            {
+                candidates = new[]
+                {
+                    new
+                    {
+                        content = new
+                        {
+                            parts = new[]
+                            {
+                                new
+                                {
+                                    text = structured
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        private static bool IsRetryableResponse(string json) =>
+            json.Contains("\"code\": 503", StringComparison.Ordinal) ||
+            json.Contains("\"code\":503", StringComparison.Ordinal) ||
+            json.Contains("\"code\": 429", StringComparison.Ordinal) ||
+            json.Contains("\"code\":429", StringComparison.Ordinal) ||
+            json.Contains("overloaded", StringComparison.OrdinalIgnoreCase) ||
+            json.Contains("RESOURCE_EXHAUSTED", StringComparison.Ordinal) ||
+            json.Contains("rate limit", StringComparison.OrdinalIgnoreCase);
 
         private static string ResolveContentType(string path) =>
             Path.GetExtension(path).ToLowerInvariant() switch

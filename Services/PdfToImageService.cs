@@ -42,8 +42,7 @@ namespace OCR_BACKEND.Services
             string outputDir,
             CancellationToken ct = default)
         {
-            // How many scanned pages to bundle per Gemini call (default 3)
-            int chunkSize = _config.GetValue("Pdf:PagesPerChunk", 3);
+            int chunkSize = Math.Max(1, _config.GetValue("Pdf:PagesPerChunk", 10));
 
             var results = new List<PdfPageResult>();
             var baseName = Path.GetFileNameWithoutExtension(pdfPath);
@@ -93,7 +92,7 @@ namespace OCR_BACKEND.Services
                         }
                     }
 
-                    // ── Step 3: write one sub-PDF per scanned page ────────────────────
+                    // ── Step 3: bundle scanned pages into chunk PDFs ─────────
                     var scannedPages = pageClassifications
                         .Where(p => p.isScanned)
                         .Select(p => p.pageNum)
@@ -108,32 +107,39 @@ namespace OCR_BACKEND.Services
                     }
 
                     _logger.LogInformation(
-                        "PDF {File} — {Scanned} scanned page(s), writing one sub-PDF each",
-                        pdfPath, scannedPages.Count);
+                        "PDF {File} — {Scanned} scanned page(s), writing chunk PDFs of up to {ChunkSize} pages",
+                        pdfPath, scannedPages.Count, chunkSize);
 
-                    foreach (var pageNum in scannedPages)
+                    foreach (var pageBatch in scannedPages.Chunk(chunkSize))
                     {
                         ct.ThrowIfCancellationRequested();
 
-                        var pageFileName = $"{baseName}_p{pageNum}.pdf";
-                        var pagePath = Path.Combine(outputDir, pageFileName);
+                        var firstPage = pageBatch[0];
+                        var lastPage = pageBatch[^1];
+                        var chunkFileName = firstPage == lastPage
+                            ? $"{baseName}_p{firstPage}.pdf"
+                            : $"{baseName}_p{firstPage}-{lastPage}.pdf";
+                        var chunkPath = Path.Combine(outputDir, chunkFileName);
 
-                        using var pageWriter = new PdfWriter(pagePath);
-                        using var pageDoc = new PdfDocument(pageWriter);
+                        using var chunkWriter = new PdfWriter(chunkPath);
+                        using var chunkDoc = new PdfDocument(chunkWriter);
 
-                        srcDoc.CopyPagesTo(new List<int> { pageNum }, pageDoc);
+                        srcDoc.CopyPagesTo(pageBatch.ToList(), chunkDoc);
 
                         _logger.LogDebug(
-                            "  Page sub-PDF written: page {Page} → {File}",
-                            pageNum, pageFileName);
+                            "  Chunk sub-PDF written: pages {Start}-{End} → {File}",
+                            firstPage, lastPage, chunkFileName);
 
-                        results.Add(new PdfPageResult(
-                            PageNumber: pageNum,
-                            FileName: pageFileName,
-                            Text: string.Empty,
-                            NeedsOcr: true,
-                            ChunkPath: pagePath      // unique path per page now
-                        ));
+                        foreach (var pageNum in pageBatch)
+                        {
+                            results.Add(new PdfPageResult(
+                                PageNumber: pageNum,
+                                FileName: $"{baseName}_p{pageNum}.pdf",
+                                Text: string.Empty,
+                                NeedsOcr: true,
+                                ChunkPath: chunkPath
+                            ));
+                        }
                     }
 
                     // Sort results by page number so the DB rows are in order

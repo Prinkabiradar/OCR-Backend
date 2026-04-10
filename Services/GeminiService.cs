@@ -58,6 +58,10 @@ namespace OCR_BACKEND.Services
                             new { text = prompt }
                         }
                     }
+                },
+                generationConfig = new
+                {
+                    responseMimeType = "application/json"
                 }
             };
 

@@ -134,5 +134,59 @@ namespace OCR_BACKEND.Services
 
             await writer.CompleteAsync();
         }
+
+        public async Task<OcrJobResult?> GetJobResult(Guid jobId, string fileName)
+        {
+            var parameters = new[]
+            {
+                new NpgsqlParameter("p_jobid", jobId),
+                new NpgsqlParameter("p_filename", fileName)
+            };
+
+            const string query = @"
+SELECT result_id, job_id, file_name, file_path, ocr_text, success, error
+FROM ocr_job_results
+WHERE job_id = @p_jobid AND file_name = @p_filename
+LIMIT 1";
+
+            var dt = await _sqlDBHelper.ExecuteDataTableWithParametersAsync(query, parameters);
+            if (dt.Rows.Count == 0)
+                return null;
+
+            var row = dt.Rows[0];
+            return new OcrJobResult
+            {
+                ResultId = row.Field<Guid>("result_id"),
+                JobId = row.Field<Guid>("job_id"),
+                FileName = row.Field<string>("file_name") ?? fileName,
+                FilePath = row.Field<string?>("file_path"),
+                OcrText = row.Field<string?>("ocr_text"),
+                Success = row.Field<bool>("success"),
+                Error = row.Field<string?>("error")
+            };
+        }
+
+        public async Task UpdateJobResult(OcrJobResult result)
+        {
+            var parameters = new[]
+            {
+                new NpgsqlParameter("p_jobid", result.JobId),
+                new NpgsqlParameter("p_filename", result.FileName),
+                new NpgsqlParameter("p_filepath", (object?)result.FilePath ?? DBNull.Value),
+                new NpgsqlParameter("p_ocrtext", (object?)result.OcrText ?? DBNull.Value),
+                new NpgsqlParameter("p_success", result.Success),
+                new NpgsqlParameter("p_error", (object?)result.Error ?? DBNull.Value)
+            };
+
+            const string query = @"
+UPDATE ocr_job_results
+SET file_path = @p_filepath,
+    ocr_text = @p_ocrtext,
+    success = @p_success,
+    error = @p_error
+WHERE job_id = @p_jobid AND file_name = @p_filename";
+
+            await _sqlDBHelper.ExecuteNonQueryAsync(query, parameters);
+        }
     }
 }

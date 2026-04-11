@@ -144,6 +144,57 @@ namespace OCR_BACKEND.Controllers
                 return BadRequest(new { message = ex.Message });
             }
         }
+        [HttpGet("GetDocumentFile")]
+        public async Task<IActionResult> GetDocumentFile(int documentId)
+        {
+            var uploadsPath = Path.Combine(Directory.GetCurrentDirectory(), "uploads");
+
+            if (!Directory.Exists(uploadsPath))
+                return NotFound("Uploads folder not found");
+
+            // Find folder matching documentId
+            var targetFolder = Path.Combine(uploadsPath, documentId.ToString());
+
+            string? filePath = null;
+
+            if (Directory.Exists(targetFolder))
+            {
+                // Look inside the specific document folder
+                filePath = Directory.GetFiles(targetFolder).FirstOrDefault();
+            }
+            else
+            {
+                // Fallback: search all folders (current behavior)
+                filePath = Directory.GetDirectories(uploadsPath)
+                    .SelectMany(folder => Directory.GetFiles(folder))
+                    .FirstOrDefault();
+            }
+
+            if (filePath == null || !System.IO.File.Exists(filePath))
+                return NotFound("No file found for this document");
+
+            var contentType = GetContentType(filePath);
+
+            // ✅ Async file read
+            var bytes = await System.IO.File.ReadAllBytesAsync(filePath);
+
+            return File(bytes, contentType);
+        }
+
+        // ✅ ADD HELPER HERE (inside same class)
+        private string GetContentType(string path)
+        {
+            var ext = Path.GetExtension(path).ToLower();
+
+            return ext switch
+            {
+                ".pdf" => "application/pdf",
+                ".jpg" => "image/jpeg",
+                ".jpeg" => "image/jpeg",
+                ".png" => "image/png",
+                _ => "application/octet-stream"
+            };
+        }
     }
 }
 

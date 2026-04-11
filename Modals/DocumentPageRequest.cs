@@ -10,5 +10,6 @@
         public int UserId { get; set; }
         public string? RejectionReason { get; set; }
         public int RoleId { get; set; }
+        public Guid job_id { get; set; }
     }
 }

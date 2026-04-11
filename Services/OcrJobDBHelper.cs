@@ -179,12 +179,12 @@ LIMIT 1";
             };
 
             const string query = @"
-UPDATE ocr_job_results
-SET file_path = @p_filepath,
-    ocr_text = @p_ocrtext,
-    success = @p_success,
-    error = @p_error
-WHERE job_id = @p_jobid AND file_name = @p_filename";
+            UPDATE ocr_job_results
+            SET file_path = @p_filepath,
+                ocr_text = @p_ocrtext,
+                success = @p_success,
+                error = @p_error
+            WHERE job_id = @p_jobid AND file_name = @p_filename";
 
             await _sqlDBHelper.ExecuteNonQueryAsync(query, parameters);
         }

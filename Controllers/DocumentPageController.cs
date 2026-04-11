@@ -5,6 +5,7 @@ using OCR_BACKEND.Services;
 using System.Data;
 using System.Reflection;
 using System.Security.Claims;
+using System.Text.RegularExpressions;
 
 namespace OCR_BACKEND.Controllers
 {
@@ -13,11 +14,14 @@ namespace OCR_BACKEND.Controllers
     public class DocumentPageController : ControllerBase
     {
         private readonly IDocumentPageService _service;
+        private readonly IConfiguration _config;
 
-        public DocumentPageController(IDocumentPageService service)
+        public DocumentPageController(IDocumentPageService service, IConfiguration config)
         {
             _service = service;
+            _config = config;
         }
+
         [HttpPost("InsertUpdateDocumentPage")]
         public async Task<IActionResult> InsertUpdateDocumentPage(DocumentPageRequest model)
         {
@@ -27,9 +31,7 @@ namespace OCR_BACKEND.Controllers
             if (!int.TryParse(idClaim, out int Id))
                 return BadRequest("Invalid user ID.");
             if (!int.TryParse(RoleIdClaim, out int RoleId))
-            {
                 return BadRequest("Invalid employee ID in token.");
-            }
 
             model.UserId = Id;
             model.RoleId = RoleId;
@@ -51,25 +53,14 @@ namespace OCR_BACKEND.Controllers
         {
             try
             {
-                //var userClaims = HttpContext.User;
-                //var idClaim = userClaims.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-                //var RoleIdClaim = userClaims.FindFirst(ClaimTypes.Role)?.Value;
-                //if (!int.TryParse(idClaim, out int Id))
-                //    return BadRequest("Invalid user ID.");
-                //if (!int.TryParse(RoleIdClaim, out int RoleId))
-                //{
-                //    return BadRequest("Invalid employee ID in token.");
-                //}
-
-                // model.UserId = Id;
                 request.RoleId = 3;
                 DataTable response = await _service.GetDocumentPagesByDocument(request);
 
                 var lst = response.AsEnumerable()
                     .Select(r => r.Table.Columns.Cast<DataColumn>()
-                    .Select(c => new KeyValuePair<string, object>(c.ColumnName, r[c.Ordinal]))
-                    .ToDictionary(z => z.Key, z => z.Value)
-                ).ToList();
+                        .Select(c => new KeyValuePair<string, object>(c.ColumnName, r[c.Ordinal]))
+                        .ToDictionary(z => z.Key, z => z.Value)
+                    ).ToList();
 
                 return Ok(lst);
             }
@@ -90,11 +81,8 @@ namespace OCR_BACKEND.Controllers
                 if (!int.TryParse(idClaim, out int Id))
                     return BadRequest("Invalid user ID.");
                 if (!int.TryParse(RoleIdClaim, out int RoleId))
-                {
                     return BadRequest("Invalid employee ID in token.");
-                }
 
-                // model.UserId = Id;
                 pagination.RoleId = RoleId;
                 DataTable response = await _service.GetDocumentsByDocumentType(pagination);
 
@@ -123,19 +111,16 @@ namespace OCR_BACKEND.Controllers
                 if (!int.TryParse(idClaim, out int Id))
                     return BadRequest("Invalid user ID.");
                 if (!int.TryParse(RoleIdClaim, out int RoleId))
-                {
                     return BadRequest("Invalid employee ID in token.");
-                }
 
-                // model.UserId = Id;
                 request.RoleId = RoleId;
                 DataTable response = await _service.GetSuggestionPages(request);
 
                 var lst = response.AsEnumerable()
                     .Select(r => r.Table.Columns.Cast<DataColumn>()
-                    .Select(c => new KeyValuePair<string, object>(c.ColumnName, r[c.Ordinal]))
-                    .ToDictionary(z => z.Key, z => z.Value)
-                ).ToList();
+                        .Select(c => new KeyValuePair<string, object>(c.ColumnName, r[c.Ordinal]))
+                        .ToDictionary(z => z.Key, z => z.Value)
+                    ).ToList();
 
                 return Ok(lst);
             }
@@ -144,57 +129,113 @@ namespace OCR_BACKEND.Controllers
                 return BadRequest(new { message = ex.Message });
             }
         }
+
         [HttpGet("GetDocumentFile")]
-        public async Task<IActionResult> GetDocumentFile(int documentId)
+        public async Task<IActionResult> GetDocumentFile([FromQuery] int documentId, [FromQuery] int pageNumber = 1)
         {
-            var uploadsPath = Path.Combine(Directory.GetCurrentDirectory(), "uploads");
-
-            if (!Directory.Exists(uploadsPath))
-                return NotFound("Uploads folder not found");
-
-            // Find folder matching documentId
-            var targetFolder = Path.Combine(uploadsPath, documentId.ToString());
-
-            string? filePath = null;
-
-            if (Directory.Exists(targetFolder))
+            try
             {
-                // Look inside the specific document folder
-                filePath = Directory.GetFiles(targetFolder).FirstOrDefault();
+                // ── 1. Get job_id from DB ─────────────────────────────────────────
+                var request = new OcrDocumentRequest
+                {
+                    DocumentId = documentId,
+                    StartIndex = pageNumber,
+                    PageSize = 1,
+                    SearchBy = null,
+                    SearchCriteria = null,
+                    RoleId = 0
+                };
+
+                DataTable dt = await _service.GetDocumentPagesByDocument(request);
+
+                if (dt == null || dt.Rows.Count == 0)
+                    return NotFound(new { message = "No pages found for this document." });
+
+                var row = dt.Rows[0];
+                var jobId = row["job_id"]?.ToString();
+
+                if (string.IsNullOrWhiteSpace(jobId))
+                    return NotFound(new { message = "Job ID not found for this document." });
+
+                var storageRoot = _config["FileStorage:Root"] ?? "uploads";
+                var originalsDir = Path.Combine(storageRoot, jobId, "originals");
+                var convertedDir = Path.Combine(storageRoot, jobId, "converted");
+
+                // ── 2. Find file matching page number in originals ────────────────
+                string? filePath = null;
+
+                if (Directory.Exists(originalsDir))
+                {
+                    var allOriginals = Directory.GetFiles(originalsDir)
+                        .OrderBy(f => Path.GetFileName(f))
+                        .ToList();
+
+                    // If only one file uploaded (e.g. a PDF or single image), always return it
+                    if (allOriginals.Count == 1)
+                    {
+                        filePath = allOriginals[0];
+                    }
+                    else
+                    {
+                        // Match by page number pattern e.g. _p1, _p2 or by index
+                        filePath = allOriginals
+                            .FirstOrDefault(f => Regex.IsMatch(
+                                Path.GetFileNameWithoutExtension(f),
+                                $@"_p{pageNumber}$", RegexOptions.IgnoreCase))
+                            ?? allOriginals.ElementAtOrDefault(pageNumber - 1);
+                    }
+                }
+
+                // ── 3. Fallback to converted folder ───────────────────────────────
+                if (filePath == null && Directory.Exists(convertedDir))
+                {
+                    var allConverted = Directory.GetFiles(convertedDir)
+                        .OrderBy(f => Path.GetFileName(f))
+                        .ToList();
+
+                    if (allConverted.Count == 1)
+                    {
+                        filePath = allConverted[0];
+                    }
+                    else
+                    {
+                        filePath = allConverted
+                            .FirstOrDefault(f => Regex.IsMatch(
+                                Path.GetFileNameWithoutExtension(f),
+                                $@"_p{pageNumber}$", RegexOptions.IgnoreCase))
+                            ?? allConverted.ElementAtOrDefault(pageNumber - 1);
+                    }
+                }
+
+                if (filePath == null || !System.IO.File.Exists(filePath))
+                    return NotFound(new { message = "No file found for this document." });
+
+                // ── 4. Return as file stream (blob) ───────────────────────────────
+                var contentType = GetContentType(filePath);
+                var bytes = await System.IO.File.ReadAllBytesAsync(filePath);
+                return File(bytes, contentType);
             }
-            else
+            catch (Exception ex)
             {
-                // Fallback: search all folders (current behavior)
-                filePath = Directory.GetDirectories(uploadsPath)
-                    .SelectMany(folder => Directory.GetFiles(folder))
-                    .FirstOrDefault();
+                return BadRequest(new { message = ex.Message });
             }
-
-            if (filePath == null || !System.IO.File.Exists(filePath))
-                return NotFound("No file found for this document");
-
-            var contentType = GetContentType(filePath);
-
-            // ✅ Async file read
-            var bytes = await System.IO.File.ReadAllBytesAsync(filePath);
-
-            return File(bytes, contentType);
         }
 
-        // ✅ ADD HELPER HERE (inside same class)
         private string GetContentType(string path)
         {
-            var ext = Path.GetExtension(path).ToLower();
-
+            var ext = Path.GetExtension(path).ToLowerInvariant();
             return ext switch
             {
                 ".pdf" => "application/pdf",
                 ".jpg" => "image/jpeg",
                 ".jpeg" => "image/jpeg",
                 ".png" => "image/png",
+                ".webp" => "image/webp",
+                ".gif" => "image/gif",
+                ".tif" => "image/tiff",
+                ".tiff" => "image/tiff",
                 _ => "application/octet-stream"
             };
         }
     }
 }
-

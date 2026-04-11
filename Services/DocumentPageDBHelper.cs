@@ -24,10 +24,11 @@ namespace OCR_BACKEND.Services
                 new NpgsqlParameter("p_statusid", model.StatusId),
                 new NpgsqlParameter("p_userid", model.UserId),
                 new NpgsqlParameter("p_roleid", model.RoleId),
-                new NpgsqlParameter("p_rejectreason", model.RejectionReason ?? (object)DBNull.Value)
+                new NpgsqlParameter("p_rejectreason", model.RejectionReason ?? (object)DBNull.Value),
+                new NpgsqlParameter("p_job_id", model.job_id),
             };
 
-            string query = "SELECT insertupdate_documentpage(@p_documentpageid,@p_documentid,@p_pagenumber,@p_extractedtext,@p_statusid,@p_userid,@p_roleid,@p_rejectreason)";
+            string query = "SELECT insertupdate_documentpage(@p_documentpageid,@p_documentid,@p_pagenumber,@p_extractedtext,@p_statusid,@p_userid,@p_roleid,@p_rejectreason, @p_job_id)";
 
             using var reader = await _sqlDBHelper.ExecuteReaderAsync(query, parameters);
 

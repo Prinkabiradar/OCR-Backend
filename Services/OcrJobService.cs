@@ -60,18 +60,22 @@ namespace OCR_BACKEND.Services
 
         // ────────────────────────────────────────────────────────────────────
         public async Task<Guid> UploadAndEnqueue(
-            List<IFormFile> files,
-            CancellationToken ct = default)
+    List<IFormFile> files,
+    CancellationToken ct = default)
         {
-            var jobId = Guid.NewGuid();
-            var jobDir = Path.Combine(_config["FileStorage:Root"] ?? "uploads", jobId.ToString());
+            // ── 1. Insert job into DB first to get the real job_id ───────────────
+            var dbJobId = await _ocrJobDBHelper.InsertOcrJob(null, 0);
+            _cancellationRegistry.Register(dbJobId);
+
+            // ── 2. Create folder using the DB job_id so they always match ────────
+            var jobDir = Path.Combine(_config["FileStorage:Root"] ?? "uploads", dbJobId.ToString());
             var originalsDir = Path.Combine(jobDir, "originals");
             var convDir = Path.Combine(jobDir, "converted");
 
             Directory.CreateDirectory(originalsDir);
             Directory.CreateDirectory(convDir);
 
-            // ── Save uploaded files ──────────────────────────────────────────
+            // ── 3. Save uploaded files ────────────────────────────────────────────
             var uploadedPaths = new List<string>();
             foreach (var file in files)
             {
@@ -85,7 +89,7 @@ namespace OCR_BACKEND.Services
             var ocrWorkItems = new List<OcrJobWorkItem>();
             var preExtracted = new List<OcrJobResult>();
 
-            // ── Classify and route every uploaded file ───────────────────────
+            // ── 4. Classify and route every uploaded file ─────────────────────────
             foreach (var path in uploadedPaths)
             {
                 var ext = Path.GetExtension(path);
@@ -97,7 +101,7 @@ namespace OCR_BACKEND.Services
                         path,
                         new List<OcrJobPageReference>
                         {
-                            new(1, Path.GetFileName(path))
+                    new(1, Path.GetFileName(path))
                         }));
                     continue;
                 }
@@ -137,7 +141,7 @@ namespace OCR_BACKEND.Services
                                 path,
                                 new List<OcrJobPageReference>
                                 {
-                                    new(1, Path.GetFileName(imagePath))
+                            new(1, Path.GetFileName(imagePath))
                                 }));
                         }
                         continue;
@@ -160,7 +164,7 @@ namespace OCR_BACKEND.Services
                             path,
                             new List<OcrJobPageReference>
                             {
-                                new(1, Path.GetFileName(officeResult.OutputPath))
+                        new(1, Path.GetFileName(officeResult.OutputPath))
                             }));
 
                     continue;
@@ -171,17 +175,23 @@ namespace OCR_BACKEND.Services
 
             int totalItems = preExtracted.Count + ocrWorkItems.Sum(GetWorkItemPageCount);
             if (totalItems == 0)
-                throw new InvalidOperationException(
+            {
+                // Mark the already-inserted job as failed before throwing
+                await _ocrJobDBHelper.UpdateJobStatus(
+                    dbJobId, "Failed", 0,
                     "No processable files remain. Upload JPEG, PNG, WEBP, GIF, PDF, TIFF, DOC, DOCX, PPT, or PPTX.");
 
-            // ── Persist job record ───────────────────────────────────────────
-            var dbJobId = await _ocrJobDBHelper.InsertOcrJob(null, totalItems);
-            _cancellationRegistry.Register(dbJobId);
+                throw new InvalidOperationException(
+                    "No processable files remain. Upload JPEG, PNG, WEBP, GIF, PDF, TIFF, DOC, DOCX, PPT, or PPTX.");
+            }
+
+            // ── 5. Update DB record with the real total_files count ───────────────
+            await _ocrJobDBHelper.InsertOcrJob(dbJobId, totalItems);
 
             foreach (var r in preExtracted)
                 r.JobId = dbJobId;
 
-            // ── Store text pages immediately (no Gemini needed) ──────────────
+            // ── 6. Store text pages immediately (no Gemini needed) ────────────────
             if (preExtracted.Count > 0)
             {
                 await _ocrJobDBHelper.BulkInsertJobResults(preExtracted);
@@ -190,7 +200,7 @@ namespace OCR_BACKEND.Services
                     dbJobId, preExtracted.Count);
             }
 
-            // ── Enqueue image/chunk items for Gemini worker ──────────────────
+            // ── 7. Enqueue image/chunk items for Gemini worker ────────────────────
             if (ocrWorkItems.Count > 0)
             {
                 await _ocrJobQueue.EnqueueAsync(
@@ -210,7 +220,6 @@ namespace OCR_BACKEND.Services
 
             return dbJobId;
         }
-
         // ────────────────────────────────────────────────────────────────────
         // PDF processing: iText7 text extraction + sub-PDFs for scanned pages
         // ────────────────────────────────────────────────────────────────────

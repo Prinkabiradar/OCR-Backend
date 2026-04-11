@@ -32,7 +32,7 @@ namespace OCR_BACKEND.Controllers
             // Now process all in parallel safely
             var tasks = fileData.Select(async f =>
             {
-                var text = await _gemini.ExtractTextFromImageBytes(f.Bytes, f.ContentType);
+                var text = await _gemini.ExtractTextFromFileBytes(f.Bytes, f.ContentType);
                 return new { FileName = f.FileName, OcrResult = text };
             });
 

@@ -52,10 +52,17 @@ builder.Services.AddScoped<SuggestionDBHelper>();
 builder.Services.AddScoped<IEmailService, EmailService>();
 builder.Services.AddHttpClient<GeminiService>();
 builder.Services.AddSingleton<OcrJobQueue>();
-builder.Services.AddSingleton<OcrJobDBHelper>();    
+builder.Services.AddSingleton<OcrJobDBHelper>();
+builder.Services.AddSingleton<OcrJobCancellationRegistry>();
 builder.Services.AddScoped<IOcrJobService, OcrJobService>();
 builder.Services.AddHostedService<OcrWorkerService>();
 builder.Services.AddScoped<IFileConversionService, FileConversionService>();
+builder.Services.AddSingleton<IPdfToImageService, PdfToImageService>();
+
+builder.Services.AddHttpClient<GeminiService>(client =>
+{
+    client.Timeout = TimeSpan.FromMinutes(10);
+});
 
 builder.Services.AddScoped<IRoleAccessService, RoleAccessService>();
 builder.Services.AddScoped<RoleAccessDBHelper>();
@@ -85,7 +92,8 @@ builder.Services.AddCors(options =>
             .WithOrigins(
                 "http://localhost:4200",            
                 "https://localhost:4200",           
-                "https://tts.sharpflux.com"         
+                "https://tts.sharpflux.com",
+                "https://ocr.sharpflux.com"
             )
             .AllowAnyHeader()
             .AllowAnyMethod()
@@ -102,9 +110,10 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-app.UseHttpsRedirection();
 app.UseCors("AllowAngular");
-app.UseRouting();                
+app.UseHttpsRedirection();
+app.UseRouting();
+
 app.UseAuthentication();
 app.UseAuthorization();
 

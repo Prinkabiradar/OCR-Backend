@@ -1,4 +1,4 @@
-﻿// Services/OcrJobDBHelper.cs
+﻿ 
 using Npgsql;
 using NpgsqlTypes;
 using OCR_BACKEND.Modals;
@@ -100,29 +100,93 @@ namespace OCR_BACKEND.Services
         {
             if (results.Count == 0) return;
 
-            // Use PostgreSQL COPY for high-performance bulk insert
             using var conn = _sqlDBHelper.CreateConnection();
             await conn.OpenAsync();
 
             await using var writer = await conn.BeginBinaryImportAsync(
-                "COPY ocr_job_results (job_id, file_name, ocr_text, success, error) FROM STDIN (FORMAT BINARY)");
+                "COPY ocr_job_results (job_id, file_name, file_path, ocr_text, success, error) FROM STDIN (FORMAT BINARY)");
 
             foreach (var r in results)
             {
                 await writer.StartRowAsync();
+
+                // 1. job_id
                 await writer.WriteAsync(r.JobId, NpgsqlDbType.Uuid);
+
+                // 2. file_name
                 await writer.WriteAsync(r.FileName, NpgsqlDbType.Text);
 
+                // 3. file_path
+                if (r.FilePath is null) await writer.WriteNullAsync();
+                else await writer.WriteAsync(r.FilePath, NpgsqlDbType.Text);
+
+                // 4. ocr_text
                 if (r.OcrText is null) await writer.WriteNullAsync();
                 else await writer.WriteAsync(r.OcrText, NpgsqlDbType.Text);
 
+                // 5. success
                 await writer.WriteAsync(r.Success, NpgsqlDbType.Boolean);
 
+                // 6. error
                 if (r.Error is null) await writer.WriteNullAsync();
                 else await writer.WriteAsync(r.Error, NpgsqlDbType.Text);
             }
 
             await writer.CompleteAsync();
+        }
+
+        public async Task<OcrJobResult?> GetJobResult(Guid jobId, string fileName)
+        {
+            var parameters = new[]
+            {
+                new NpgsqlParameter("p_jobid", jobId),
+                new NpgsqlParameter("p_filename", fileName)
+            };
+
+            const string query = @"
+SELECT result_id, job_id, file_name, file_path, ocr_text, success, error
+FROM ocr_job_results
+WHERE job_id = @p_jobid AND file_name = @p_filename
+LIMIT 1";
+
+            var dt = await _sqlDBHelper.ExecuteDataTableWithParametersAsync(query, parameters);
+            if (dt.Rows.Count == 0)
+                return null;
+
+            var row = dt.Rows[0];
+            return new OcrJobResult
+            {
+                ResultId = row.Field<Guid>("result_id"),
+                JobId = row.Field<Guid>("job_id"),
+                FileName = row.Field<string>("file_name") ?? fileName,
+                FilePath = row.Field<string?>("file_path"),
+                OcrText = row.Field<string?>("ocr_text"),
+                Success = row.Field<bool>("success"),
+                Error = row.Field<string?>("error")
+            };
+        }
+
+        public async Task UpdateJobResult(OcrJobResult result)
+        {
+            var parameters = new[]
+            {
+                new NpgsqlParameter("p_jobid", result.JobId),
+                new NpgsqlParameter("p_filename", result.FileName),
+                new NpgsqlParameter("p_filepath", (object?)result.FilePath ?? DBNull.Value),
+                new NpgsqlParameter("p_ocrtext", (object?)result.OcrText ?? DBNull.Value),
+                new NpgsqlParameter("p_success", result.Success),
+                new NpgsqlParameter("p_error", (object?)result.Error ?? DBNull.Value)
+            };
+
+            const string query = @"
+UPDATE ocr_job_results
+SET file_path = @p_filepath,
+    ocr_text = @p_ocrtext,
+    success = @p_success,
+    error = @p_error
+WHERE job_id = @p_jobid AND file_name = @p_filename";
+
+            await _sqlDBHelper.ExecuteNonQueryAsync(query, parameters);
         }
     }
 }

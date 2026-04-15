@@ -45,7 +45,7 @@ namespace OCR_BACKEND.Services
 
             string query = "SELECT fn_ocrjob_updatestatus(@p_jobid, @p_status::ocr_job_status, @p_processedfiles, @p_errormessage)";
 
-            await _sqlDBHelper.ExecuteReaderAsync(query, parameters);
+            await _sqlDBHelper.ExecuteNonQueryAsync(query, parameters);
         }
 
         public async Task<DataTable> GetOcrJobs(OcrJobFetchRequest model)

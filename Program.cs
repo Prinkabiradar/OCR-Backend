@@ -1,3 +1,4 @@
+using Microsoft.Extensions.FileProviders;
 using Microsoft.IdentityModel.Tokens;
 using OCR_BACKEND.BackgroundServices;
 using OCR_BACKEND.Queue;
@@ -102,8 +103,16 @@ builder.Services.AddCors(options =>
 });
 
 var app = builder.Build();
+app.UseStaticFiles(); // serves wwwroot by default
 
- 
+// If uploads folder is outside wwwroot:
+app.UseStaticFiles(new StaticFileOptions
+{
+    FileProvider = new PhysicalFileProvider(
+        Path.Combine(Directory.GetCurrentDirectory(), "uploads")),
+    RequestPath = "/uploads"
+});
+
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();

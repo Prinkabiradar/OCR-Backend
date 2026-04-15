@@ -108,7 +108,26 @@ namespace OCR_BACKEND.Services
 
                 if (ext.Equals(".pdf", StringComparison.OrdinalIgnoreCase))
                 {
-                    await ProcessPdfAsync(path, convDir, ocrWorkItems, preExtracted, ct);
+                    // Split into individual page PDFs inside originals/
+                    var pagePaths = SplitPdfIntoPages(path, originalsDir);
+
+                    // Delete the original whole PDF — pages are now stored individually
+                    File.Delete(path);
+
+                    // Process each single-page PDF through the normal text/OCR classifier
+                    foreach (var pagePath in pagePaths)
+                    {
+                        var pageFileName = Path.GetFileName(pagePath); // e.g. Priyanka_CV_p1.pdf
+
+                        // Always send to Gemini OCR regardless of text/scanned
+                        ocrWorkItems.Add(new OcrJobWorkItem(
+                            pagePath,
+                            pagePath,
+                            new List<OcrJobPageReference>
+                            {
+                new(1, pageFileName)
+                            }));
+                    }
                     continue;
                 }
 
@@ -419,7 +438,27 @@ namespace OCR_BACKEND.Services
             existing.Error = null;
             return existing;
         }
+        private static List<string> SplitPdfIntoPages(string pdfPath, string outputDir)
+        {
+            var baseName = Path.GetFileNameWithoutExtension(pdfPath);
+            var pagePaths = new List<string>();
 
+            using var reader = new iText.Kernel.Pdf.PdfReader(pdfPath);
+            using var srcDoc = new iText.Kernel.Pdf.PdfDocument(reader);
+
+            int total = srcDoc.GetNumberOfPages();
+            for (int pageNum = 1; pageNum <= total; pageNum++)
+            {
+                var outPath = Path.Combine(outputDir, $"{baseName}_p{pageNum}.pdf");
+                using var output = new MemoryStream();
+                using var writer = new iText.Kernel.Pdf.PdfWriter(outPath);
+                using var target = new iText.Kernel.Pdf.PdfDocument(writer);
+                srcDoc.CopyPagesTo(new List<int> { pageNum }, target);
+                pagePaths.Add(outPath);
+            }
+
+            return pagePaths;
+        }
         private async Task<byte[]> BuildRetriedBytesFromConvertedFileAsync(
             string sourcePath,
             string resultFileName,

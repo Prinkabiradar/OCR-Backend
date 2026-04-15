@@ -106,6 +106,7 @@ namespace OCR_BACKEND.Services
                     continue;
                 }
 
+
                 if (ext.Equals(".pdf", StringComparison.OrdinalIgnoreCase))
                 {
                     // Split into individual page PDFs inside originals/

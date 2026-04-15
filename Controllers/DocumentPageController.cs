@@ -58,9 +58,9 @@ namespace OCR_BACKEND.Controllers
 
                 var lst = response.AsEnumerable()
                     .Select(r => r.Table.Columns.Cast<DataColumn>()
-                        .Select(c => new KeyValuePair<string, object>(c.ColumnName, r[c.Ordinal]))
-                        .ToDictionary(z => z.Key, z => z.Value)
-                    ).ToList();
+                    .Select(c => new KeyValuePair<string, object>(c.ColumnName, r[c.Ordinal]))
+                    .ToDictionary(z => z.Key, z => z.Value)
+                ).ToList();
 
                 return Ok(lst);
             }
@@ -112,15 +112,16 @@ namespace OCR_BACKEND.Controllers
                     return BadRequest("Invalid user ID.");
                 if (!int.TryParse(RoleIdClaim, out int RoleId))
                     return BadRequest("Invalid employee ID in token.");
+                }
 
                 request.RoleId = RoleId;
                 DataTable response = await _service.GetSuggestionPages(request);
 
                 var lst = response.AsEnumerable()
                     .Select(r => r.Table.Columns.Cast<DataColumn>()
-                        .Select(c => new KeyValuePair<string, object>(c.ColumnName, r[c.Ordinal]))
-                        .ToDictionary(z => z.Key, z => z.Value)
-                    ).ToList();
+                    .Select(c => new KeyValuePair<string, object>(c.ColumnName, r[c.Ordinal]))
+                    .ToDictionary(z => z.Key, z => z.Value)
+                ).ToList();
 
                 return Ok(lst);
             }
@@ -214,11 +215,11 @@ namespace OCR_BACKEND.Controllers
                 var contentType = GetContentType(filePath);
                 var bytes = await System.IO.File.ReadAllBytesAsync(filePath);
                 return File(bytes, contentType);
-            }
+    }
             catch (Exception ex)
             {
                 return BadRequest(new { message = ex.Message });
-            }
+}
         }
 
         private string GetContentType(string path)

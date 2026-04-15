@@ -60,8 +60,8 @@ namespace OCR_BACKEND.Services
 
         // ────────────────────────────────────────────────────────────────────
         public async Task<Guid> UploadAndEnqueue(
-    List<IFormFile> files,
-    CancellationToken ct = default)
+            List<IFormFile> files,
+            CancellationToken ct = default)
         {
             // ── 1. Insert job into DB first to get the real job_id ───────────────
             var dbJobId = await _ocrJobDBHelper.InsertOcrJob(null, 0);
@@ -101,7 +101,7 @@ namespace OCR_BACKEND.Services
                         path,
                         new List<OcrJobPageReference>
                         {
-                    new(1, Path.GetFileName(path))
+                            new(1, Path.GetFileName(path))
                         }));
                     continue;
                 }
@@ -161,7 +161,7 @@ namespace OCR_BACKEND.Services
                                 path,
                                 new List<OcrJobPageReference>
                                 {
-                            new(1, Path.GetFileName(imagePath))
+                                    new(1, Path.GetFileName(imagePath))
                                 }));
                         }
                         continue;
@@ -184,7 +184,7 @@ namespace OCR_BACKEND.Services
                             path,
                             new List<OcrJobPageReference>
                             {
-                        new(1, Path.GetFileName(officeResult.OutputPath))
+                                new(1, Path.GetFileName(officeResult.OutputPath))
                             }));
 
                     continue;
@@ -211,7 +211,7 @@ namespace OCR_BACKEND.Services
             foreach (var r in preExtracted)
                 r.JobId = dbJobId;
 
-            // ── 6. Store text pages immediately (no Gemini needed) ────────────────
+            // ── Store text pages immediately (no Gemini needed) ──────────────
             if (preExtracted.Count > 0)
             {
                 await _ocrJobDBHelper.BulkInsertJobResults(preExtracted);
@@ -220,7 +220,7 @@ namespace OCR_BACKEND.Services
                     dbJobId, preExtracted.Count);
             }
 
-            // ── 7. Enqueue image/chunk items for Gemini worker ────────────────────
+            // ── Enqueue image/chunk items for Gemini worker ──────────────────
             if (ocrWorkItems.Count > 0)
             {
                 await _ocrJobQueue.EnqueueAsync(
@@ -240,6 +240,7 @@ namespace OCR_BACKEND.Services
 
             return dbJobId;
         }
+
         // ────────────────────────────────────────────────────────────────────
         // PDF processing: iText7 text extraction + sub-PDFs for scanned pages
         // ────────────────────────────────────────────────────────────────────

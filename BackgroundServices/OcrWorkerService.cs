@@ -8,6 +8,8 @@ namespace OCR_BACKEND.BackgroundServices
 {
     public class OcrWorkerService : BackgroundService
     {
+        private sealed record GeminiAttemptResult(string? Response, string? ErrorDetail);
+
         private readonly OcrJobQueue _ocrJobQueue;
         private readonly OcrJobDBHelper _ocrJobDBHelper;
         private readonly GeminiService _gemini;
@@ -70,7 +72,7 @@ namespace OCR_BACKEND.BackgroundServices
             try
             {
                 var storageRoot = Path.GetFullPath(_config["FileStorage:Root"] ?? "uploads");
-                var insertBatchSize = Math.Max(1, _config.GetValue("Ocr:InsertBatchSize", 10));
+                var insertBatchSize = Math.Max(1, _config.GetValue("Ocr:InsertBatchSize", 25));
                 var resultChannel = Channel.CreateUnbounded<List<OcrJobResult>>();
 
                 var producer = Task.Run(async () =>
@@ -80,13 +82,13 @@ namespace OCR_BACKEND.BackgroundServices
                         var launchIndex = 0;
                         var options = new ParallelOptions
                         {
-                            MaxDegreeOfParallelism = Math.Max(1, _config.GetValue("Ocr:MaxParallelChunks", 5)),
+                            MaxDegreeOfParallelism = Math.Max(1, _config.GetValue("Ocr:MaxParallelChunks", 8)),
                             CancellationToken = ct
                         };
 
                         await Parallel.ForEachAsync(item.Items, options, async (workItem, token) =>
                         {
-                            var staggerDelayMs = Math.Max(0, _config.GetValue("Ocr:StaggerDelayMs", 200));
+                            var staggerDelayMs = Math.Max(0, _config.GetValue("Ocr:StaggerDelayMs", 0));
                             var currentIndex = Interlocked.Increment(ref launchIndex);
                             if (staggerDelayMs > 0 && currentIndex > 1)
                                 await Task.Delay(staggerDelayMs, token);
@@ -161,65 +163,23 @@ namespace OCR_BACKEND.BackgroundServices
             CancellationToken ct)
         {
             var fileName = Path.GetFileName(workItem.FilePath);
-            var maxRetries = Math.Max(1, _config.GetValue("Ocr:MaxRetries", 7));
-            var retryBaseDelayMs = Math.Max(250, _config.GetValue("Ocr:RetryBaseDelayMs", 5000));
-            var maxRetryDelayMs = Math.Max(retryBaseDelayMs, _config.GetValue("Ocr:MaxRetryDelayMs", 60_000));
+            var bytes = await File.ReadAllBytesAsync(workItem.FilePath, ct);
+            var contentType = ResolveContentType(workItem.FilePath);
+            var attemptResult = await ExecuteGeminiWithRetryAsync(
+                () => _gemini.ExtractTextFromFileBytes(bytes, contentType),
+                fileName,
+                ct);
 
-            for (var attempt = 1; attempt <= maxRetries; attempt++)
+            if (attemptResult.Response is null)
             {
-                try
-                {
-                    var bytes = await File.ReadAllBytesAsync(workItem.FilePath, ct);
-                    var contentType = ResolveContentType(workItem.FilePath);
-                    var ocrText = await _gemini.ExtractTextFromFileBytes(bytes, contentType);
-
-                    if (IsRetryableResponse(ocrText))
-                    {
-                        _logger.LogWarning(
-                            "Work item {File} got a retryable Gemini response (attempt {Attempt}/{Max})",
-                            fileName,
-                            attempt,
-                            maxRetries);
-
-                        if (attempt == maxRetries)
-                            break;
-
-                        var delay = GetRetryDelayMs(attempt, retryBaseDelayMs, maxRetryDelayMs);
-                        await Task.Delay(delay, ct);
-                        continue;
-                    }
-
-                    return await BuildSuccessResultsAsync(jobId, workItem, storageRoot, ocrText, ct);
-                }
-                catch (Exception ex) when (attempt < maxRetries)
-                {
-                    _logger.LogWarning(
-                        "Work item {File} failed on attempt {Attempt}/{Max}: {Message}",
-                        fileName,
-                        attempt,
-                        maxRetries,
-                        ex.Message);
-
-                    var delay = GetRetryDelayMs(attempt, retryBaseDelayMs, maxRetryDelayMs);
-                    await Task.Delay(delay, ct);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(
-                        "Work item {File} failed after {Max} attempts: {Message}",
-                        fileName,
-                        maxRetries,
-                        ex.Message);
-
-                    return BuildFailureResults(jobId, workItem, storageRoot, ex.Message);
-                }
+                return BuildFailureResults(
+                    jobId,
+                    workItem,
+                    storageRoot,
+                    attemptResult.ErrorDetail ?? "Gemini returned retryable errors after all retry attempts.");
             }
 
-            return BuildFailureResults(
-                jobId,
-                workItem,
-                storageRoot,
-                "Gemini returned retryable errors after all retry attempts.");
+            return await BuildSuccessResultsAsync(jobId, workItem, storageRoot, attemptResult.Response, ct);
         }
 
         private async Task<List<OcrJobResult>> BuildSuccessResultsAsync(
@@ -328,19 +288,19 @@ namespace OCR_BACKEND.BackgroundServices
                 var page = workItem.Pages[index];
                 var pageLabel = $"{Path.GetFileName(workItem.FilePath)} page {page.PageNumber}";
                 var pageBytes = ExtractSinglePagePdfBytes(workItem.FilePath, index + 1);
-                var pageResponse = await ExecuteGeminiWithRetryAsync(
+                var pageResult = await ExecuteGeminiWithRetryAsync(
                     () => _gemini.ExtractTextFromFileBytes(pageBytes, "application/pdf"),
                     pageLabel,
                     ct);
 
-                if (pageResponse is null)
+                if (pageResult.Response is null)
                 {
                     results.Add(new OcrJobResult
                     {
                         JobId = jobId,
                         FileName = page.FileName,
                         Success = false,
-                        Error = "Gemini returned retryable errors after all retry attempts.",
+                        Error = pageResult.ErrorDetail ?? "Gemini returned retryable errors after all retry attempts.",
                         FilePath = relativePath
                     });
                     continue;
@@ -350,7 +310,7 @@ namespace OCR_BACKEND.BackgroundServices
                 {
                     JobId = jobId,
                     FileName = page.FileName,
-                    OcrText = NormalizeSinglePageResponse(pageResponse),
+                    OcrText = NormalizeSinglePageResponse(pageResult.Response),
                     Success = true,
                     FilePath = relativePath
                 });
@@ -424,14 +384,15 @@ namespace OCR_BACKEND.BackgroundServices
         private static int GetWorkItemPageCount(OcrJobWorkItem item)
             => item.Pages.Count == 0 ? 1 : item.Pages.Count;
 
-        private async Task<string?> ExecuteGeminiWithRetryAsync(
+        private async Task<GeminiAttemptResult> ExecuteGeminiWithRetryAsync(
             Func<Task<string>> operation,
             string fileName,
             CancellationToken ct)
         {
             var maxRetries = Math.Max(1, _config.GetValue("Ocr:MaxRetries", 7));
-            var retryBaseDelayMs = Math.Max(250, _config.GetValue("Ocr:RetryBaseDelayMs", 5000));
-            var maxRetryDelayMs = Math.Max(retryBaseDelayMs, _config.GetValue("Ocr:MaxRetryDelayMs", 60_000));
+            var retryBaseDelayMs = Math.Max(250, _config.GetValue("Ocr:RetryBaseDelayMs", 1500));
+            var maxRetryDelayMs = Math.Max(retryBaseDelayMs, _config.GetValue("Ocr:MaxRetryDelayMs", 15_000));
+            string? lastErrorDetail = null;
 
             for (var attempt = 1; attempt <= maxRetries; attempt++)
             {
@@ -440,23 +401,26 @@ namespace OCR_BACKEND.BackgroundServices
                     var response = await operation();
                     if (IsRetryableResponse(response))
                     {
+                        lastErrorDetail = ExtractGeminiErrorDetail(response);
                         _logger.LogWarning(
-                            "Work item {File} got a retryable Gemini response (attempt {Attempt}/{Max})",
+                            "Work item {File} got a retryable Gemini response (attempt {Attempt}/{Max}): {Error}",
                             fileName,
                             attempt,
-                            maxRetries);
+                            maxRetries,
+                            lastErrorDetail ?? "Retryable Gemini error");
 
                         if (attempt == maxRetries)
-                            return null;
+                            return new GeminiAttemptResult(null, lastErrorDetail);
 
                         await Task.Delay(GetRetryDelayMs(attempt, retryBaseDelayMs, maxRetryDelayMs), ct);
                         continue;
                     }
 
-                    return response;
+                    return new GeminiAttemptResult(response, null);
                 }
                 catch (Exception ex) when (attempt < maxRetries)
                 {
+                    lastErrorDetail = ex.Message;
                     _logger.LogWarning(
                         "Work item {File} failed on attempt {Attempt}/{Max}: {Message}",
                         fileName,
@@ -468,16 +432,17 @@ namespace OCR_BACKEND.BackgroundServices
                 }
                 catch (Exception ex)
                 {
+                    lastErrorDetail = ex.Message;
                     _logger.LogError(
                         "Work item {File} failed after {Max} attempts: {Message}",
                         fileName,
                         maxRetries,
                         ex.Message);
-                    return null;
+                    return new GeminiAttemptResult(null, lastErrorDetail);
                 }
             }
 
-            return null;
+            return new GeminiAttemptResult(null, lastErrorDetail);
         }
 
         private static int GetRetryDelayMs(int attempt, int retryBaseDelayMs, int maxRetryDelayMs)
@@ -556,6 +521,30 @@ namespace OCR_BACKEND.BackgroundServices
             {
                 error = ex.Message;
                 return false;
+            }
+        }
+
+        private static string? ExtractGeminiErrorDetail(string rawResponse)
+        {
+            try
+            {
+                using var document = JsonDocument.Parse(rawResponse);
+                if (!document.RootElement.TryGetProperty("error", out var error))
+                    return null;
+
+                var code = error.TryGetProperty("code", out var codeElement) ? codeElement.ToString() : null;
+                var status = error.TryGetProperty("status", out var statusElement) ? statusElement.GetString() : null;
+                var message = error.TryGetProperty("message", out var messageElement) ? messageElement.GetString() : null;
+
+                var parts = new[] { code, status, message }
+                    .Where(part => !string.IsNullOrWhiteSpace(part));
+
+                var detail = string.Join(" | ", parts!);
+                return string.IsNullOrWhiteSpace(detail) ? null : detail;
+            }
+            catch
+            {
+                return null;
             }
         }
 

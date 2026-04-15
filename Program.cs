@@ -1,5 +1,6 @@
 using Microsoft.Extensions.FileProviders;
 using Microsoft.IdentityModel.Tokens;
+using Microsoft.AspNetCore.Http.Features;
 using OCR_BACKEND.BackgroundServices;
 using OCR_BACKEND.Queue;
 using OCR_BACKEND.Services;
@@ -53,12 +54,21 @@ builder.Services.AddScoped<SuggestionDBHelper>();
 builder.Services.AddScoped<IEmailService, EmailService>();
 builder.Services.AddHttpClient<GeminiService>();
 builder.Services.AddSingleton<OcrJobQueue>();
-builder.Services.AddSingleton<OcrJobDBHelper>();
+builder.Services.AddSingleton<OcrJobCancellationRegistry>();
+builder.Services.AddSingleton<OcrJobDBHelper>();    
 builder.Services.AddSingleton<OcrJobCancellationRegistry>();
 builder.Services.AddScoped<IOcrJobService, OcrJobService>();
 builder.Services.AddHostedService<OcrWorkerService>();
 builder.Services.AddScoped<IFileConversionService, FileConversionService>();
 builder.Services.AddSingleton<IPdfToImageService, PdfToImageService>();
+builder.Services.Configure<FormOptions>(options =>
+{
+    options.MultipartBodyLengthLimit = 500 * 1024 * 1024;
+});
+builder.Services.Configure<IISServerOptions>(options =>
+{
+    options.MaxRequestBodySize = 500 * 1024 * 1024;
+});
 
 builder.Services.AddHttpClient<GeminiService>(client =>
 {
@@ -85,14 +95,17 @@ builder.Services.AddAuthentication("Bearer")
     };
 });
 
+const string FrontendCorsPolicy = "FrontendCorsPolicy";
+
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowAngular", policy =>
+    options.AddPolicy(FrontendCorsPolicy, policy =>
     {
         policy
             .WithOrigins(
-                "http://localhost:4200",            
-                "https://localhost:4200",           
+                "http://localhost:4200",
+                "https://localhost:4200",
                 "https://tts.sharpflux.com",
                 "https://ocr.sharpflux.com"
             )
@@ -112,7 +125,7 @@ app.UseStaticFiles(new StaticFileOptions
         Path.Combine(Directory.GetCurrentDirectory(), "uploads")),
     RequestPath = "/uploads"
 });
-
+ 
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
@@ -122,6 +135,7 @@ if (app.Environment.IsDevelopment())
 app.UseCors("AllowAngular");
 app.UseHttpsRedirection();
 app.UseRouting();
+app.UseCors(FrontendCorsPolicy);
 
 app.UseAuthentication();
 app.UseAuthorization();

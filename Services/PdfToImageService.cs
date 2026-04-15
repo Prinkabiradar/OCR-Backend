@@ -42,7 +42,7 @@ namespace OCR_BACKEND.Services
             string outputDir,
             CancellationToken ct = default)
         {
-            int chunkSize = Math.Max(1, _config.GetValue("Pdf:PagesPerChunk", 10));
+            int chunkSize = Math.Max(1, _config.GetValue("Pdf:PagesPerChunk", 16));
 
             var results = new List<PdfPageResult>();
             var baseName = Path.GetFileNameWithoutExtension(pdfPath);

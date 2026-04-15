@@ -33,19 +33,44 @@ namespace OCR_BACKEND.Services
 
             // PDFs may be multi-page → ask for a JSON array, one element per page.
             // Images are always single-page → ask for a single JSON object.
-            var prompt = isPdf
-                ? @"This is a PDF document. For EACH page return a JSON array where every
-                  element has exactly these fields:
-                  [{ ""page"": 1,
-                     ""extracted_text"": ""<all text on that page>"",
-                     ""suggested_document_type"": ""<Letter|Poem|Novel|Book|Certificate|Invoice|Report|Legal|Article|Receipt|Form|Contract|Newspaper>"",
-                     ""suggested_document_name"": ""<title or short descriptive name, max 10 words>"" }]
-                  Return ONLY the JSON array. No markdown, no explanation, no code fences."
-                : @"Analyse this document image and return a JSON object with exactly these fields:
-                  { ""extracted_text"": ""<all text extracted from the document>"",
-                    ""suggested_document_type"": ""<Letter|Poem|Novel|Book|Certificate|Invoice|Report|Legal|Article|Receipt|Form|Contract|Newspaper>"",
-                    ""suggested_document_name"": ""<title or short descriptive name, max 10 words>"" }
-                  Return ONLY the JSON. No markdown, no explanation, no code fences.";
+                var prompt = isPdf
+                        ? @"This is a PDF document. For EACH page return a JSON array where every element has exactly these fields:
+ 
+                        [
+                          {
+                            ""page"": 1,
+                            ""extracted_text"": ""<HTML content preserving headings, paragraphs, bold, italics, tables, and layout>"",
+                            ""suggested_document_type"": ""<Letter|Poem|Novel|Book|Certificate|Invoice|Report|Legal|Article|Receipt|Form|Contract|Newspaper>"",
+                            ""suggested_document_name"": ""<title or short descriptive name, max 10 words>""
+                          }
+                        ]
+ 
+                        Rules:
+                        - extracted_text MUST be valid clean HTML
+                        - Use tags like <p>, <b>, <i>, <h1>, <table>, <tr>, <td>
+                        - Preserve structure and layout as much as possible
+                        - Maintain line breaks
+                        - Try to reconstruct tables accurately
+                        - NO markdown
+                        - NO explanation
+                        - Return ONLY JSON"
+
+                        : @"Analyse this document image and return a JSON object with exactly these fields:
+ 
+                        {
+                          ""extracted_text"": ""<HTML content preserving headings, paragraphs, bold, italics, tables, and layout>"",
+                          ""suggested_document_type"": ""<Letter|Poem|Novel|Book|Certificate|Invoice|Report|Legal|Article|Receipt|Form|Contract|Newspaper>"",
+                          ""suggested_document_name"": ""<title or short descriptive name, max 10 words>""
+                        }
+ 
+                        Rules:
+                        - extracted_text MUST be valid clean HTML
+                        - Preserve layout as much as possible
+                        - Use semantic HTML tags
+                        - Keep tables intact
+                        - NO markdown
+                        - NO explanation
+                        - Return ONLY JSON";
 
             var body = new
             {

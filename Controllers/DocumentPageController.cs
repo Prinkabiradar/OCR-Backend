@@ -112,7 +112,7 @@ namespace OCR_BACKEND.Controllers
                     return BadRequest("Invalid user ID.");
                 if (!int.TryParse(RoleIdClaim, out int RoleId))
                     return BadRequest("Invalid employee ID in token.");
-                }
+                
 
                 request.RoleId = RoleId;
                 DataTable response = await _service.GetSuggestionPages(request);

@@ -99,7 +99,7 @@ const string FrontendCorsPolicy = "FrontendCorsPolicy";
 
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("AllowAngular", policy =>
+    //options.AddPolicy("AllowAngular", policy =>
     options.AddPolicy(FrontendCorsPolicy, policy =>
     {
         policy

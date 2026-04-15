@@ -11,6 +11,6 @@
         public string? RejectionReason { get; set; }
         public int RoleId { get; set; }
         public Guid job_id { get; set; }
-        public string file_name { get; set; }
+        public string? file_name { get; set; }
     }
 }

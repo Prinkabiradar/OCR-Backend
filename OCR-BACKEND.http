@@ -1,0 +1,6 @@
+@OCR_BACKEND_HostAddress = http://localhost:5247
+
+GET {{OCR_BACKEND_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

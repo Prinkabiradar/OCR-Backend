@@ -146,8 +146,9 @@ namespace OCR_BACKEND.Services
                 pages.Select(p => $"Page {p.PageNumber}:\n{p.ExtractedText}"));
             //gemini-3.0-pro
             var apiKey = _config["Gemini:ApiKey"];
-           // var url = $"https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key={apiKey}";
-            var url = $"https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key={apiKey}";
+            var model = _config["Gemini:Model"] ?? "gemini-2.5-flash";
+            // var url = $"https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key={apiKey}";
+            var url = $"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={apiKey}";
 
             var prompt = $@"
                         You are a document summarizer.

@@ -46,6 +46,7 @@ namespace OCR_BACKEND.Services
                     var roleClaim = tokenValidationResult.Claims.FirstOrDefault(claim => claim.Type == ClaimTypes.Role);
                     var roleIdClaim = tokenValidationResult.Claims.FirstOrDefault(claim => claim.Type == "RoleId");
                     var emailClaim = tokenValidationResult.Claims.FirstOrDefault(claim => claim.Type == "Email");
+                    var roleNameClaim = tokenValidationResult.Claims.FirstOrDefault(claim => claim.Type == "RoleName");
                     var companyLogoClaim = tokenValidationResult.Claims.FirstOrDefault(claim => claim.Type == "CompanyLogoURL"); // New
                     var locationIdClaim = tokenValidationResult.Claims.FirstOrDefault(claim => claim.Type == "LocationId");
 
@@ -56,6 +57,7 @@ namespace OCR_BACKEND.Services
                             UserId = int.Parse(idClaim.Value),
                             UserName = userNameClaim.Value,
                             RoleId = int.Parse(roleClaim.Value),
+                            RoleName = roleNameClaim?.Value,
                             //email = emailClaim?.Value,
                             //CompanyLogoURL = companyLogoClaim?.Value,
                             //LocationId = int.Parse(locationIdClaim.Value) 

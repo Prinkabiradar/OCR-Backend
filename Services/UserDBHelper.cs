@@ -31,6 +31,7 @@ namespace OCR_BACKEND.Services
                     UserName = reader.GetString(reader.GetOrdinal("username")),
                     Email = reader.GetString(reader.GetOrdinal("email")),
                     RoleId = reader.GetInt32(reader.GetOrdinal("roleid")),
+                    RoleName= reader.GetString(reader.GetOrdinal("rolename")),
                     UserPass = reader.GetString(reader.GetOrdinal("userpass")),
                     IsActive = reader.GetBoolean(reader.GetOrdinal("isactive"))
                 };

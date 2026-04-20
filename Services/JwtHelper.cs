@@ -22,7 +22,8 @@ public class JwtHelper
             new Claim(ClaimTypes.NameIdentifier, user.UserId.ToString()),
             new Claim(ClaimTypes.Name, user.UserName),
             new Claim(ClaimTypes.Role, user.RoleId.ToString()),
-            new Claim("Email", user.Email)
+            new Claim("Email", user.Email),
+            new Claim("RoleName", user.RoleName)
         };
 
         var key = new SymmetricSecurityKey(

@@ -97,6 +97,7 @@ namespace OCR_BACKEND.BackgroundServices
                                 item.JobId,
                                 workItem,
                                 storageRoot,
+                                item.GeminiModel,
                                 token);
 
                             await resultChannel.Writer.WriteAsync(results, token);
@@ -160,13 +161,14 @@ namespace OCR_BACKEND.BackgroundServices
             Guid jobId,
             OcrJobWorkItem workItem,
             string storageRoot,
+            string? geminiModel,
             CancellationToken ct)
         {
             var fileName = Path.GetFileName(workItem.FilePath);
             var bytes = await File.ReadAllBytesAsync(workItem.FilePath, ct);
             var contentType = ResolveContentType(workItem.FilePath);
             var attemptResult = await ExecuteGeminiWithRetryAsync(
-                () => _gemini.ExtractTextFromFileBytes(bytes, contentType),
+                () => _gemini.ExtractTextFromFileBytes(bytes, contentType, geminiModel),
                 fileName,
                 ct);
 
@@ -179,7 +181,7 @@ namespace OCR_BACKEND.BackgroundServices
                     attemptResult.ErrorDetail ?? "Gemini returned retryable errors after all retry attempts.");
             }
 
-            return await BuildSuccessResultsAsync(jobId, workItem, storageRoot, attemptResult.Response, ct);
+            return await BuildSuccessResultsAsync(jobId, workItem, storageRoot, attemptResult.Response, geminiModel, ct);
         }
 
         private async Task<List<OcrJobResult>> BuildSuccessResultsAsync(
@@ -187,6 +189,7 @@ namespace OCR_BACKEND.BackgroundServices
             OcrJobWorkItem workItem,
             string storageRoot,
             string rawResponse,
+            string? geminiModel,
             CancellationToken ct)
         {
             var relativePath = Path.GetRelativePath(
@@ -219,7 +222,7 @@ namespace OCR_BACKEND.BackgroundServices
                     workItem.FilePath,
                     parseError);
 
-                return await ReprocessPagesIndividuallyAsync(jobId, workItem, storageRoot, ct);
+                return await ReprocessPagesIndividuallyAsync(jobId, workItem, storageRoot, geminiModel, ct);
             }
 
             var payloadByPage = new Dictionary<int, JsonElement>();
@@ -275,6 +278,7 @@ namespace OCR_BACKEND.BackgroundServices
             Guid jobId,
             OcrJobWorkItem workItem,
             string storageRoot,
+            string? geminiModel,
             CancellationToken ct)
         {
             var relativePath = Path.GetRelativePath(
@@ -289,7 +293,7 @@ namespace OCR_BACKEND.BackgroundServices
                 var pageLabel = $"{Path.GetFileName(workItem.FilePath)} page {page.PageNumber}";
                 var pageBytes = ExtractSinglePagePdfBytes(workItem.FilePath, index + 1);
                 var pageResult = await ExecuteGeminiWithRetryAsync(
-                    () => _gemini.ExtractTextFromFileBytes(pageBytes, "application/pdf"),
+                    () => _gemini.ExtractTextFromFileBytes(pageBytes, "application/pdf", geminiModel),
                     pageLabel,
                     ct);
 

@@ -19,7 +19,7 @@ namespace OCR_BACKEND.Services
         }
 
         // ── Single unified entry point for both images and PDFs ──────────────
-        public async Task<string> ExtractTextFromFileBytes(byte[] bytes, string contentType)
+        public async Task<string> ExtractTextFromFileBytes(byte[] bytes, string contentType, string? modelOverride = null)
         {
             if (bytes.Length > MaxInlineBytes)
                 throw new InvalidOperationException(
@@ -27,7 +27,9 @@ namespace OCR_BACKEND.Services
                     "Reduce Pdf:PagesPerChunk in appsettings.json.");
 
             var apiKey = _config["Gemini:ApiKey"];
-            var model = _config["Gemini:Model"] ?? "gemini-2.5-flash";
+            var model = string.IsNullOrWhiteSpace(modelOverride)
+                ? (_config["Gemini:Model"] ?? "gemini-2.5-flash")
+                : modelOverride.Trim();
             var base64 = Convert.ToBase64String(bytes);
             var isPdf = contentType.Equals("application/pdf", StringComparison.OrdinalIgnoreCase);
 

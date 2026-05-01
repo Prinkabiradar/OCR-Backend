@@ -9,11 +9,11 @@ namespace OCR_BACKEND.Services
 {
     public interface IOcrJobService
     {
-        Task<Guid> UploadAndEnqueue(List<IFormFile> files, CancellationToken ct = default);
+        Task<Guid> UploadAndEnqueue(List<IFormFile> files, string? geminiModel = null, CancellationToken ct = default);
         Task<DataTable> GetOcrJobs(OcrJobFetchRequest model);
         Task<DataTable> GetOcrJobById(Guid jobId);
         Task<DataTable> GetOcrJobResults(Guid jobId);
-        Task<OcrJobResult> RetryResult(Guid jobId, string fileName, CancellationToken ct = default);
+        Task<OcrJobResult> RetryResult(Guid jobId, string fileName, string? geminiModel = null, CancellationToken ct = default);
         Task CancelJob(Guid jobId, CancellationToken ct = default);
     }
 
@@ -61,6 +61,7 @@ namespace OCR_BACKEND.Services
         // ────────────────────────────────────────────────────────────────────
         public async Task<Guid> UploadAndEnqueue(
             List<IFormFile> files,
+            string? geminiModel = null,
             CancellationToken ct = default)
         {
             // ── 1. Insert job into DB first to get the real job_id ───────────────
@@ -224,7 +225,7 @@ namespace OCR_BACKEND.Services
             if (ocrWorkItems.Count > 0)
             {
                 await _ocrJobQueue.EnqueueAsync(
-                    new OcrJobQueueItem(dbJobId, ocrWorkItems), ct);
+                    new OcrJobQueueItem(dbJobId, ocrWorkItems, geminiModel), ct);
 
                 _logger.LogInformation(
                     "Job {JobId} — {Count} OCR page(s) queued across {ChunkCount} work item(s)",
@@ -356,7 +357,7 @@ namespace OCR_BACKEND.Services
         public Task<DataTable> GetOcrJobById(Guid jobId) => _ocrJobDBHelper.GetOcrJobById(jobId);
         public Task<DataTable> GetOcrJobResults(Guid jobId) => _ocrJobDBHelper.GetOcrJobResults(jobId);
 
-        public async Task<OcrJobResult> RetryResult(Guid jobId, string fileName, CancellationToken ct = default)
+        public async Task<OcrJobResult> RetryResult(Guid jobId, string fileName, string? geminiModel = null, CancellationToken ct = default)
         {
             var existing = await _ocrJobDBHelper.GetJobResult(jobId, fileName);
             if (existing is null)
@@ -372,7 +373,7 @@ namespace OCR_BACKEND.Services
             if (!File.Exists(absoluteOriginalPath))
                 throw new FileNotFoundException("Original source file could not be found.", absoluteOriginalPath);
 
-            var retried = await BuildRetriedResultAsync(existing, absoluteOriginalPath, ct);
+            var retried = await BuildRetriedResultAsync(existing, absoluteOriginalPath, geminiModel, ct);
             await _ocrJobDBHelper.UpdateJobResult(retried);
             return retried;
         }
@@ -395,6 +396,7 @@ namespace OCR_BACKEND.Services
         private async Task<OcrJobResult> BuildRetriedResultAsync(
             OcrJobResult existing,
             string absoluteOriginalPath,
+            string? geminiModel,
             CancellationToken ct)
         {
             var ext = Path.GetExtension(absoluteOriginalPath);
@@ -434,7 +436,7 @@ namespace OCR_BACKEND.Services
                 throw new InvalidOperationException($"Retry is not supported for {ext} files.");
             }
 
-            var rawResponse = await _gemini.ExtractTextFromFileBytes(bytes, contentType);
+            var rawResponse = await _gemini.ExtractTextFromFileBytes(bytes, contentType, geminiModel);
             existing.OcrText = NormalizeSinglePageResponse(rawResponse);
             existing.Success = true;
             existing.Error = null;
@@ -530,6 +532,20 @@ namespace OCR_BACKEND.Services
             using var writer = new iText.Kernel.Pdf.PdfWriter(output);
             using var source = new iText.Kernel.Pdf.PdfDocument(reader);
             using var target = new iText.Kernel.Pdf.PdfDocument(writer);
+
+            var totalPages = source.GetNumberOfPages();
+            if (totalPages <= 0)
+                throw new InvalidOperationException("The source PDF has no pages.");
+
+            if (pageNumber < 1 || pageNumber > totalPages)
+            {
+                // Retry often points to _p74 style names, but stored file can be already a single-page split PDF.
+                if (totalPages == 1)
+                    pageNumber = 1;
+                else
+                    throw new InvalidOperationException(
+                        $"Requested page number {pageNumber} is out of bounds for a PDF with {totalPages} page(s).");
+            }
 
             source.CopyPagesTo(new List<int> { pageNumber }, target);
             target.Close();

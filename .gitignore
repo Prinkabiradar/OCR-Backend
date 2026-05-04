@@ -2,4 +2,7 @@ bin/
 obj/
 uploads/
 *.pdf
-*.pdb
+*.pdbuploads/
+publish_output/
+*.zip
+.DS_Store

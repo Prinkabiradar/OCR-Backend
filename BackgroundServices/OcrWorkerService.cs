@@ -1,7 +1,9 @@
 ﻿using OCR_BACKEND.Modals;
 using OCR_BACKEND.Queue;
 using OCR_BACKEND.Services;
+using System.Net;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading.Channels;
 
 namespace OCR_BACKEND.BackgroundServices
@@ -97,6 +99,7 @@ namespace OCR_BACKEND.BackgroundServices
                                 item.JobId,
                                 workItem,
                                 storageRoot,
+                                item.GeminiModel,
                                 token);
 
                             await resultChannel.Writer.WriteAsync(results, token);
@@ -160,13 +163,14 @@ namespace OCR_BACKEND.BackgroundServices
             Guid jobId,
             OcrJobWorkItem workItem,
             string storageRoot,
+            string? geminiModel,
             CancellationToken ct)
         {
             var fileName = Path.GetFileName(workItem.FilePath);
             var bytes = await File.ReadAllBytesAsync(workItem.FilePath, ct);
             var contentType = ResolveContentType(workItem.FilePath);
             var attemptResult = await ExecuteGeminiWithRetryAsync(
-                () => _gemini.ExtractTextFromFileBytes(bytes, contentType),
+                () => _gemini.ExtractTextFromFileBytes(bytes, contentType, geminiModel),
                 fileName,
                 ct);
 
@@ -179,7 +183,7 @@ namespace OCR_BACKEND.BackgroundServices
                     attemptResult.ErrorDetail ?? "Gemini returned retryable errors after all retry attempts.");
             }
 
-            return await BuildSuccessResultsAsync(jobId, workItem, storageRoot, attemptResult.Response, ct);
+            return await BuildSuccessResultsAsync(jobId, workItem, storageRoot, attemptResult.Response, geminiModel, ct);
         }
 
         private async Task<List<OcrJobResult>> BuildSuccessResultsAsync(
@@ -187,6 +191,7 @@ namespace OCR_BACKEND.BackgroundServices
             OcrJobWorkItem workItem,
             string storageRoot,
             string rawResponse,
+            string? geminiModel,
             CancellationToken ct)
         {
             var relativePath = Path.GetRelativePath(
@@ -219,7 +224,7 @@ namespace OCR_BACKEND.BackgroundServices
                     workItem.FilePath,
                     parseError);
 
-                return await ReprocessPagesIndividuallyAsync(jobId, workItem, storageRoot, ct);
+                return await ReprocessPagesIndividuallyAsync(jobId, workItem, storageRoot, geminiModel, ct);
             }
 
             var payloadByPage = new Dictionary<int, JsonElement>();
@@ -275,6 +280,7 @@ namespace OCR_BACKEND.BackgroundServices
             Guid jobId,
             OcrJobWorkItem workItem,
             string storageRoot,
+            string? geminiModel,
             CancellationToken ct)
         {
             var relativePath = Path.GetRelativePath(
@@ -289,7 +295,7 @@ namespace OCR_BACKEND.BackgroundServices
                 var pageLabel = $"{Path.GetFileName(workItem.FilePath)} page {page.PageNumber}";
                 var pageBytes = ExtractSinglePagePdfBytes(workItem.FilePath, index + 1);
                 var pageResult = await ExecuteGeminiWithRetryAsync(
-                    () => _gemini.ExtractTextFromFileBytes(pageBytes, "application/pdf"),
+                    () => _gemini.ExtractTextFromFileBytes(pageBytes, "application/pdf", geminiModel),
                     pageLabel,
                     ct);
 
@@ -573,7 +579,7 @@ namespace OCR_BACKEND.BackgroundServices
 
         private static string WrapPayloadAsGeminiResponse(JsonElement payload)
         {
-            var structured = payload.GetRawText();
+            var structured = SanitizePayloadJson(payload);
 
             return JsonSerializer.Serialize(new
             {
@@ -594,6 +600,42 @@ namespace OCR_BACKEND.BackgroundServices
                     }
                 }
             });
+        }
+
+        private static string SanitizePayloadJson(JsonElement payload)
+        {
+            if (payload.ValueKind != JsonValueKind.Object)
+                return payload.GetRawText();
+
+            using var stream = new MemoryStream();
+            using (var writer = new Utf8JsonWriter(stream))
+            {
+                writer.WriteStartObject();
+                foreach (var property in payload.EnumerateObject())
+                {
+                    if (property.NameEquals("extracted_text") && property.Value.ValueKind == JsonValueKind.String)
+                    {
+                        writer.WriteString(property.Name, CleanExtractedText(property.Value.GetString() ?? string.Empty));
+                        continue;
+                    }
+
+                    property.WriteTo(writer);
+                }
+                writer.WriteEndObject();
+            }
+
+            return System.Text.Encoding.UTF8.GetString(stream.ToArray());
+        }
+
+        private static string CleanExtractedText(string value)
+        {
+            var cleaned = StripJsonCodeFences(value)
+                .Replace("\\n", "\n", StringComparison.Ordinal)
+                .Replace("\\r", "\r", StringComparison.Ordinal);
+
+            cleaned = WebUtility.HtmlDecode(cleaned);
+            cleaned = Regex.Replace(cleaned, @"</?(html|head|body)\b[^>]*>", string.Empty, RegexOptions.IgnoreCase);
+            return cleaned.Trim();
         }
 
         private static bool IsRetryableResponse(string json) =>

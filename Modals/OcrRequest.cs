@@ -11,6 +11,9 @@ namespace OCR_BACKEND.Modals
     {
         [FromForm(Name = "files")]
         public List<IFormFile> Files { get; set; } = new();
+
+        [FromForm(Name = "geminiModel")]
+        public string? GeminiModel { get; set; }
     }
 
     public class OcrJobFetchRequest
@@ -25,6 +28,7 @@ namespace OCR_BACKEND.Modals
     {
         public Guid JobId { get; set; }
         public string FileName { get; set; } = "";
+        public string? GeminiModel { get; set; }
     }
 
     public class CancelOcrJobRequest
@@ -62,5 +66,5 @@ namespace OCR_BACKEND.Modals
         string OriginalSourcePath,
         List<OcrJobPageReference> Pages);
 
-    public record OcrJobQueueItem(Guid JobId, List<OcrJobWorkItem> Items);
+    public record OcrJobQueueItem(Guid JobId, List<OcrJobWorkItem> Items, string? GeminiModel = null);
 }

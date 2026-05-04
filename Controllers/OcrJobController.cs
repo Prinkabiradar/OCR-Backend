@@ -28,7 +28,7 @@ namespace OCR_BACKEND.Controllers
                 if (request.Files == null || request.Files.Count == 0)
                     return BadRequest(new { message = "No files uploaded" });
 
-                var jobId = await _service.UploadAndEnqueue(request.Files, ct);
+                var jobId = await _service.UploadAndEnqueue(request.Files, request.GeminiModel, ct);
 
                 return Ok(new
                 {
@@ -116,7 +116,7 @@ namespace OCR_BACKEND.Controllers
                 if (request.JobId == Guid.Empty || string.IsNullOrWhiteSpace(request.FileName))
                     return BadRequest(new { message = "JobId and FileName are required." });
 
-                var result = await _service.RetryResult(request.JobId, request.FileName, ct);
+                var result = await _service.RetryResult(request.JobId, request.FileName, request.GeminiModel, ct);
                 return Ok(result);
             }
             catch (Exception ex)

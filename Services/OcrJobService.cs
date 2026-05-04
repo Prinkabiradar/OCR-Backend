@@ -2,6 +2,7 @@
 using OCR_BACKEND.Queue;
 using OCR_BACKEND.Services;
 using System.Data;
+using System.Net;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
@@ -590,7 +591,7 @@ namespace OCR_BACKEND.Services
                                 {
                                     new
                                     {
-                                        text = payload.GetRawText()
+                                        text = SanitizePayloadJson(payload)
                                     }
                                 }
                             }
@@ -602,6 +603,42 @@ namespace OCR_BACKEND.Services
             {
                 return rawResponse;
             }
+        }
+
+        private static string SanitizePayloadJson(JsonElement payload)
+        {
+            if (payload.ValueKind != JsonValueKind.Object)
+                return payload.GetRawText();
+
+            using var stream = new MemoryStream();
+            using (var writer = new Utf8JsonWriter(stream))
+            {
+                writer.WriteStartObject();
+                foreach (var property in payload.EnumerateObject())
+                {
+                    if (property.NameEquals("extracted_text") && property.Value.ValueKind == JsonValueKind.String)
+                    {
+                        writer.WriteString(property.Name, CleanExtractedText(property.Value.GetString() ?? string.Empty));
+                        continue;
+                    }
+
+                    property.WriteTo(writer);
+                }
+                writer.WriteEndObject();
+            }
+
+            return System.Text.Encoding.UTF8.GetString(stream.ToArray());
+        }
+
+        private static string CleanExtractedText(string value)
+        {
+            var cleaned = StripJsonCodeFences(value)
+                .Replace("\\n", "\n", StringComparison.Ordinal)
+                .Replace("\\r", "\r", StringComparison.Ordinal);
+
+            cleaned = WebUtility.HtmlDecode(cleaned);
+            cleaned = Regex.Replace(cleaned, @"</?(html|head|body)\b[^>]*>", string.Empty, RegexOptions.IgnoreCase);
+            return cleaned.Trim();
         }
 
         private static string StripJsonCodeFences(string value)

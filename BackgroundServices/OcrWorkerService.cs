@@ -1,7 +1,9 @@
 ﻿using OCR_BACKEND.Modals;
 using OCR_BACKEND.Queue;
 using OCR_BACKEND.Services;
+using System.Net;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading.Channels;
 
 namespace OCR_BACKEND.BackgroundServices
@@ -577,7 +579,7 @@ namespace OCR_BACKEND.BackgroundServices
 
         private static string WrapPayloadAsGeminiResponse(JsonElement payload)
         {
-            var structured = payload.GetRawText();
+            var structured = SanitizePayloadJson(payload);
 
             return JsonSerializer.Serialize(new
             {
@@ -598,6 +600,42 @@ namespace OCR_BACKEND.BackgroundServices
                     }
                 }
             });
+        }
+
+        private static string SanitizePayloadJson(JsonElement payload)
+        {
+            if (payload.ValueKind != JsonValueKind.Object)
+                return payload.GetRawText();
+
+            using var stream = new MemoryStream();
+            using (var writer = new Utf8JsonWriter(stream))
+            {
+                writer.WriteStartObject();
+                foreach (var property in payload.EnumerateObject())
+                {
+                    if (property.NameEquals("extracted_text") && property.Value.ValueKind == JsonValueKind.String)
+                    {
+                        writer.WriteString(property.Name, CleanExtractedText(property.Value.GetString() ?? string.Empty));
+                        continue;
+                    }
+
+                    property.WriteTo(writer);
+                }
+                writer.WriteEndObject();
+            }
+
+            return System.Text.Encoding.UTF8.GetString(stream.ToArray());
+        }
+
+        private static string CleanExtractedText(string value)
+        {
+            var cleaned = StripJsonCodeFences(value)
+                .Replace("\\n", "\n", StringComparison.Ordinal)
+                .Replace("\\r", "\r", StringComparison.Ordinal);
+
+            cleaned = WebUtility.HtmlDecode(cleaned);
+            cleaned = Regex.Replace(cleaned, @"</?(html|head|body)\b[^>]*>", string.Empty, RegexOptions.IgnoreCase);
+            return cleaned.Trim();
         }
 
         private static bool IsRetryableResponse(string json) =>

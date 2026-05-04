@@ -16,6 +16,18 @@ namespace OCR_BACKEND.Controllers
         {
             _service = service;
         }
+
+        // ── Shared helper ─────────────────────────────────────────────────────
+        private static string SanitizeFileName(string name, string fallback)
+        {
+            string safe = new string(name
+                .Where(c => !Path.GetInvalidFileNameChars().Contains(c))
+                .ToArray())
+                .Trim();
+
+            return string.IsNullOrWhiteSpace(safe) ? fallback : safe;
+        }
+
         [HttpGet("GeneratePdf")]
         public async Task<IActionResult> GeneratePdfByDocumentId([FromQuery] OcrDocumentRequest request)
         {
@@ -23,52 +35,69 @@ namespace OCR_BACKEND.Controllers
             {
                 var userClaims = HttpContext.User;
                 var idClaim = userClaims.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-                var RoleIdClaim = userClaims.FindFirst(ClaimTypes.Role)?.Value;
-                if (!int.TryParse(idClaim, out int Id))
-                    return BadRequest("Invalid user ID.");
-                if (!int.TryParse(RoleIdClaim, out int RoleId))
-                {
-                    return BadRequest("Invalid employee ID in token.");
-                }
-
-               // request.UserId = Id;
-                request.RoleId = RoleId;
-                // ── Auth claims ────────────────────────────────────────────
-                //var userClaims = HttpContext.User;
-               // var idClaim = userClaims.FindFirst(ClaimTypes.NameIdentifier)?.Value;
                 var roleClaim = userClaims.FindFirst(ClaimTypes.Role)?.Value;
 
-                if (!int.TryParse(idClaim, out int userId))
+                if (!int.TryParse(idClaim, out _))
                     return BadRequest("Invalid user ID.");
+
                 if (!int.TryParse(roleClaim, out int roleId))
                     return BadRequest("Invalid role ID in token.");
 
                 request.RoleId = roleId;
 
-                // ── Fetch pages for the requested DocumentId ───────────────
                 DataTable response = await _service.GetDocumentPagesByDocument(request);
 
                 if (response == null || response.Rows.Count == 0)
                     return NotFound($"No pages found for DocumentId {request.DocumentId}.");
 
-                // ── Build PDF in memory ────────────────────────────────────
-                string documentName = response.Rows[0]["DocumentName"]?.ToString() ?? $"Document {request.DocumentId}";
-                byte[] pdfBytes = DocumentPdfGenerator.Generate(response, request.DocumentId, documentName);
+                string documentName = response.Rows[0]["DocumentName"]?.ToString()?.Trim()
+                                      ?? string.Empty;
 
-                string fileName = $"Document_{request.DocumentId}.pdf";
-                return File(pdfBytes, "application/pdf", fileName);
+                if (string.IsNullOrWhiteSpace(documentName))
+                    documentName = $"Document_{request.DocumentId}";
+
+                byte[] pdfBytes = DocumentPdfGenerator.Generate(
+                                      response, request.DocumentId, documentName);
+
+                string baseFileName = documentName?.Trim() ?? "";
+
+                // Remove extension if already present
+                baseFileName = Path.GetFileNameWithoutExtension(baseFileName);
+
+                // EXTRA SAFETY: remove trailing ".docx" again if weird cases
+                if (baseFileName.EndsWith(".docx", StringComparison.OrdinalIgnoreCase))
+                {
+                    baseFileName = baseFileName.Substring(0, baseFileName.Length - 5);
+                }
+
+                // If empty → fallback
+                if (string.IsNullOrWhiteSpace(baseFileName))
+                {
+                    baseFileName = $"Document_{request.DocumentId}";
+                }
+
+                // Sanitize
+                string safeFileName = SanitizeFileName(baseFileName, $"Document_{request.DocumentId}");
+
+                // Final filename
+                string finalFileName = safeFileName + ".docx";
+
+                Response.Headers["Content-Disposition"] =
+                    $"attachment; filename=\"{finalFileName}\"; filename*=UTF-8''{Uri.EscapeDataString(finalFileName)}";
+
+                return File(pdfBytes, "application/pdf");
             }
             catch (Exception ex)
             {
                 return BadRequest(new { message = ex.Message });
             }
         }
+
         [HttpGet("GenerateAllPdfs")]
         public async Task<IActionResult> GenerateAllPdfs([FromQuery] OcrDocumentRequest request)
         {
             try
             {
-                // ── Auth claims ────────────────────────────────────────────
                 var userClaims = HttpContext.User;
                 var idClaim = userClaims.FindFirst(ClaimTypes.NameIdentifier)?.Value;
                 var roleClaim = userClaims.FindFirst(ClaimTypes.Role)?.Value;
@@ -80,17 +109,15 @@ namespace OCR_BACKEND.Controllers
 
                 request.RoleId = roleId;
 
-                // ── Fetch ALL pages ────────────────────────────────────────
                 DataTable response = await _service.GetDocumentPagesByDocument(request);
 
                 if (response == null || response.Rows.Count == 0)
                     return NotFound("No document pages found.");
 
-                // ── Group rows by DocumentId ───────────────────────────────
+                // Group rows by DocumentId
                 var groupedByDocument = response.AsEnumerable()
                     .GroupBy(row => row.Field<int>("DocumentId"));
 
-                // ── Build a ZIP containing one PDF per DocumentId ──────────
                 using var zipStream = new MemoryStream();
                 using (var archive = new System.IO.Compression.ZipArchive(
                            zipStream,
@@ -101,16 +128,23 @@ namespace OCR_BACKEND.Controllers
                     {
                         int documentId = group.Key;
 
-                        // Create a DataTable for just this document's rows
-                        DataTable docTable = response.Clone(); // same schema
+                        DataTable docTable = response.Clone();
                         foreach (var row in group)
                             docTable.ImportRow(row);
 
-                        string documentName = docTable.Rows[0]["DocumentName"]?.ToString() ?? $"Document {documentId}";
+                        string documentName = docTable.Rows[0]["DocumentName"]?.ToString()?.Trim()
+                                              ?? string.Empty;
+
+                        if (string.IsNullOrWhiteSpace(documentName))
+                            documentName = $"Document_{documentId}";
+
                         byte[] pdfBytes = DocumentPdfGenerator.Generate(docTable, documentId, documentName);
 
+                        // Use documentName instead of documentId for the zip entry filename
+                        string safeFileName = SanitizeFileName(documentName, $"Document_{documentId}");
+
                         var entry = archive.CreateEntry(
-                            $"Document_{documentId}.pdf",
+                            $"{safeFileName}.pdf",
                             System.IO.Compression.CompressionLevel.Fastest);
 
                         using var entryStream = entry.Open();
@@ -138,6 +172,7 @@ namespace OCR_BACKEND.Controllers
 
                 if (!int.TryParse(idClaim, out _))
                     return BadRequest("Invalid user ID.");
+
                 if (!int.TryParse(roleClaim, out int roleId))
                     return BadRequest("Invalid role ID in token.");
 
@@ -148,16 +183,32 @@ namespace OCR_BACKEND.Controllers
                 if (response == null || response.Rows.Count == 0)
                     return NotFound($"No pages found for DocumentId {request.DocumentId}.");
 
-                string documentName = response.Rows[0]["DocumentName"]?.ToString()
-                                      ?? $"Document {request.DocumentId}";
+                // ── Safely read DocumentName handling DBNull explicitly ───────────
+                string documentName = response.Rows[0].IsNull("DocumentName")
+                    ? string.Empty
+                    : response.Rows[0]["DocumentName"].ToString()!.Trim();
+
+                if (string.IsNullOrWhiteSpace(documentName))
+                    documentName = $"Document_{request.DocumentId}";
+
+                // ── DEBUG: temporarily uncomment to verify DB value ───────────────
+                // return BadRequest(new { documentName, length = documentName.Length });
 
                 byte[] wordBytes = DocumentWordGenerator.Generate(
                                        response, request.DocumentId, documentName);
 
+                // ── Sanitize for filename use ──────────────────────────────────────
+                string safeFileName = SanitizeFileName(documentName, $"Document_{request.DocumentId}");
+
+                // ── RFC 5987 encoding for spaces and unicode ───────────────────────
+                string encodedFileName = Uri.EscapeDataString(safeFileName + ".docx");
+
+                Response.Headers["Content-Disposition"] =
+                    $"attachment; filename=\"{safeFileName}.docx\"; filename*=UTF-8''{encodedFileName}";
+
                 return File(
                     wordBytes,
-                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    $"Document_{request.DocumentId}.docx"
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                 );
             }
             catch (Exception ex)

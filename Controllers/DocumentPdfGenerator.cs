@@ -1,10 +1,8 @@
 ﻿using HtmlAgilityPack;
-using Microsoft.IdentityModel.Tokens;
 using QuestPDF.Fluent;
 using QuestPDF.Helpers;
 using QuestPDF.Infrastructure;
 using System.Data;
-using System.Xml;
 
 namespace OCR_BACKEND.Controllers
 {
@@ -14,60 +12,72 @@ namespace OCR_BACKEND.Controllers
         {
             QuestPDF.Settings.License = LicenseType.Community;
 
+            var orderedRows = pages.AsEnumerable()
+                .OrderBy(r => Convert.ToInt32(r["PageNumber"]))
+                .ToList();
+
             var pdf = QuestPDF.Fluent.Document.Create(container =>
             {
-                container.Page(page =>
+                for (int i = 0; i < orderedRows.Count; i++)
                 {
-                    page.Size(PageSizes.A4);
-                    page.Margin(2, Unit.Centimetre);
-                    page.DefaultTextStyle(x => x.FontSize(11).FontFamily("Arial"));
+                    var row = orderedRows[i];
+                    int pageNumber = Convert.ToInt32(row["PageNumber"]);
+                    string html = row["ExtractedText"]?.ToString() ?? string.Empty;
+                    bool isFirstOcrPage = i == 0;
 
-                    page.Header().Column(col =>
+                    container.Page(page =>
                     {
-                        col.Item().LineHorizontal(1).LineColor(Colors.Grey.Lighten1);
-                    });
+                        page.Size(PageSizes.A4);
+                        page.Margin(2, Unit.Centimetre);
+                        page.DefaultTextStyle(x => x.FontSize(11).FontFamily("Arial"));
 
-                    page.Content().PaddingVertical(10).Column(col =>
-                    {
-                        // Document title
-                        col.Item().PaddingBottom(16).Column(title =>
+                        page.Header().Column(header =>
                         {
-                            title.Item().Text(documentName).Bold().FontSize(18);
-                            title.Item().PaddingTop(4)
-                                .Text($"Generated: {DateTime.Now:dd MMM yyyy HH:mm}")
-                                .FontSize(9).FontColor(Colors.Grey.Medium);
-                            title.Item().PaddingTop(8)
-                                .LineHorizontal(1).LineColor(Colors.Grey.Lighten1);
+                            // Document title only on the very first OCR page
+                            if (isFirstOcrPage)
+                            {
+                                header.Item().PaddingBottom(6).Column(title =>
+                                {
+                                    title.Item().Text(documentName).Bold().FontSize(18);
+                                    title.Item().PaddingTop(4)
+                                        .Text($"Generated: {DateTime.Now:dd MMM yyyy HH:mm}")
+                                        .FontSize(9).FontColor(Colors.Grey.Medium);
+                                });
+                            }
+
+                            // Page label shown on every PDF page of this OCR section
+                            header.Item().PaddingBottom(4).Row(r =>
+                            {
+                                r.RelativeItem().Text($"Page {pageNumber}")
+                                    .Bold().FontSize(11).FontColor(Colors.Grey.Medium);
+                                r.AutoItem().Text(documentName)
+                                    .FontSize(9).FontColor(Colors.Grey.Lighten1);
+                            });
+                            header.Item().LineHorizontal(0.5f).LineColor(Colors.Grey.Lighten2);
                         });
 
-                        foreach (DataRow row in pages.Rows)
+                        page.Content().PaddingVertical(10).Column(col =>
                         {
-                            int pageNumber = Convert.ToInt32(row["PageNumber"]);
-                            string html = row["ExtractedText"]?.ToString() ?? string.Empty;
+                            RenderHtml(col, html);
+                        });
 
-                            col.Item().PaddingBottom(20).Column(inner =>
-                            {
-                                inner.Item().PaddingBottom(4)
-                                    .Text($"Page {pageNumber}")
-                                    .Bold().FontSize(11).FontColor(Colors.Grey.Medium);
-
-                                inner.Item().PaddingBottom(8)
-                                    .LineHorizontal(0.5f).LineColor(Colors.Grey.Lighten2);
-
-                                // Render each HTML block element as its own QuestPDF item
-                                RenderHtml(inner, html);
-                            });
-                        }
+                        page.Footer().AlignCenter().Text(text =>
+                        {
+                            text.Span("Page ").FontSize(9).FontColor(Colors.Grey.Medium);
+                            text.CurrentPageNumber().FontSize(9).FontColor(Colors.Grey.Medium);
+                            text.Span(" of ").FontSize(9).FontColor(Colors.Grey.Medium);
+                            text.TotalPages().FontSize(9).FontColor(Colors.Grey.Medium);
+                        });
                     });
-
-                    page.Footer().AlignCenter().Text(text =>
-                    {
-                        text.Span("Page ").FontSize(9).FontColor(Colors.Grey.Medium);
-                        text.CurrentPageNumber().FontSize(9).FontColor(Colors.Grey.Medium);
-                        text.Span(" of ").FontSize(9).FontColor(Colors.Grey.Medium);
-                        text.TotalPages().FontSize(9).FontColor(Colors.Grey.Medium);
-                    });
-                });
+                }
+            })
+            .WithMetadata(new DocumentMetadata
+            {
+                Title = documentName,
+                Author = "OCR Backend",
+                Subject = documentName,
+                Keywords = documentName,
+                Creator = "OCR Backend"
             });
 
             return pdf.GeneratePdf();
@@ -98,7 +108,6 @@ namespace OCR_BACKEND.Controllers
 
             var tag = node.Name.ToLower();
 
-            // Block-level elements — each gets its own column item
             switch (tag)
             {
                 case "p":
@@ -123,7 +132,7 @@ namespace OCR_BACKEND.Controllers
                     return;
 
                 case "br":
-                    col.Item().PaddingBottom(4).Text(""); // spacing
+                    col.Item().PaddingBottom(4).Text("");
                     return;
 
                 case "table":
@@ -131,7 +140,6 @@ namespace OCR_BACKEND.Controllers
                     return;
 
                 default:
-                    // Recurse into unknown block wrappers
                     foreach (var child in node.ChildNodes)
                         RenderNode(col, child);
                     return;
@@ -140,7 +148,6 @@ namespace OCR_BACKEND.Controllers
 
         private static void RenderBlockElement(ColumnDescriptor col, HtmlNode node, string prefix = "")
         {
-            // Determine text alignment from style/align attribute
             var alignment = GetAlignment(node);
 
             col.Item().PaddingBottom(4).Element(el =>
@@ -156,7 +163,6 @@ namespace OCR_BACKEND.Controllers
                 {
                     if (!string.IsNullOrEmpty(prefix))
                         t.Span(prefix);
-
                     RenderInlineNodes(t, node.ChildNodes);
                 });
             });
@@ -204,7 +210,6 @@ namespace OCR_BACKEND.Controllers
 
             col.Item().PaddingBottom(8).Table(table =>
             {
-                // Count max columns
                 int colCount = rows.Max(r =>
                     r.ChildNodes.Count(n => n.Name == "td" || n.Name == "th"));
 
@@ -236,10 +241,10 @@ namespace OCR_BACKEND.Controllers
             });
         }
 
-        // ── Inline rendering (bold, italic, underline, spans) ─────────────────
+        // ── Inline rendering ──────────────────────────────────────────────────
 
         private static void RenderInlineNodes(TextDescriptor t, HtmlNodeCollection nodes,
-    bool bold = false, bool italic = false, bool underline = false)
+            bool bold = false, bool italic = false, bool underline = false)
         {
             if (nodes == null) return;
 
@@ -259,10 +264,9 @@ namespace OCR_BACKEND.Controllers
 
                 var tag = node.Name.ToLower();
 
-                // ✅ FIX: treat <br> as a newline within the same text block
                 if (tag == "br")
                 {
-                    t.Line(""); // emits a line break, keeping alignment intact
+                    t.Line("");
                     continue;
                 }
 
@@ -273,14 +277,9 @@ namespace OCR_BACKEND.Controllers
                 var (color, fontSize) = GetInlineStyle(node);
 
                 if (color != null || fontSize != null || isBold || isItalic || isUnderline)
-                {
-                    RenderInlineNodesStyled(t, node.ChildNodes,
-                        isBold, isItalic, isUnderline, color, fontSize ?? 10f);
-                }
+                    RenderInlineNodesStyled(t, node.ChildNodes, isBold, isItalic, isUnderline, color, fontSize ?? 10f);
                 else
-                {
                     RenderInlineNodes(t, node.ChildNodes, isBold, isItalic, isUnderline);
-                }
             }
         }
 
@@ -300,10 +299,7 @@ namespace OCR_BACKEND.Controllers
                     if (bold) span = span.Bold();
                     if (italic) span = span.Italic();
                     if (underline) span = span.Underline();
-                    if (color != null)
-                    {
-                        try { span = span.FontColor(color); } catch { }
-                    }
+                    if (color != null) { try { span = span.FontColor(color); } catch { } }
                 }
                 else
                 {
@@ -321,11 +317,9 @@ namespace OCR_BACKEND.Controllers
 
         private static string GetAlignment(HtmlNode node)
         {
-            // Check align attribute
             var align = node.GetAttributeValue("align", "").ToLower();
             if (!string.IsNullOrEmpty(align)) return align;
 
-            // Check style="text-align: center" etc.
             var style = node.GetAttributeValue("style", "");
             var match = System.Text.RegularExpressions.Regex.Match(
                 style, @"text-align\s*:\s*(\w+)",

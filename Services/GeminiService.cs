@@ -26,7 +26,7 @@ namespace OCR_BACKEND.Services
                     $"File size {bytes.Length / 1024 / 1024}MB exceeds the 18MB Gemini inline limit. " +
                     "Reduce Pdf:PagesPerChunk in appsettings.json.");
 
-            var apiKey = _config["Gemini:ApiKey"];
+            var apiKey = ResolveApiKey();
             var model = string.IsNullOrWhiteSpace(modelOverride)
                 ? (_config["Gemini:Model"] ?? "gemini-2.5-flash")
                 : modelOverride.Trim();
@@ -99,8 +99,34 @@ namespace OCR_BACKEND.Services
       $"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={apiKey}",
       new StringContent(json, Encoding.UTF8, "application/json")
   );
+            var responseBody = await response.Content.ReadAsStringAsync();
+            if (!response.IsSuccessStatusCode)
+            {
+                if (responseBody.Contains("API key not valid", StringComparison.OrdinalIgnoreCase) ||
+                    responseBody.Contains("API Key not found", StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidOperationException(
+                        "Gemini API key is invalid or missing. Set a valid key in Gemini:ApiKey or GEMINI_API_KEY.");
+                }
 
-            return await response.Content.ReadAsStringAsync();
+                throw new InvalidOperationException(
+                    $"Gemini request failed ({(int)response.StatusCode}): {responseBody}");
+            }
+
+            return responseBody;
+        }
+
+        private string ResolveApiKey()
+        {
+            var apiKey = _config["Gemini:ApiKey"];
+            if (string.IsNullOrWhiteSpace(apiKey))
+                apiKey = Environment.GetEnvironmentVariable("GEMINI_API_KEY");
+
+            if (string.IsNullOrWhiteSpace(apiKey))
+                throw new InvalidOperationException(
+                    "Gemini API key is not configured. Set Gemini:ApiKey in appsettings or GEMINI_API_KEY.");
+
+            return apiKey.Trim();
         }
 
         // ── Keep old name as a thin wrapper so nothing else breaks ──────────

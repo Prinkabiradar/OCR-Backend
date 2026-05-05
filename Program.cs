@@ -120,11 +120,13 @@ builder.Services.AddCors(options =>
 var app = builder.Build();
 app.UseStaticFiles(); // serves wwwroot by default
 
-// If uploads folder is outside wwwroot:
+var uploadsRoot = Path.Combine(Directory.GetCurrentDirectory(), "uploads");
+Directory.CreateDirectory(uploadsRoot);
+
+// Serve uploads even when the folder was not present before startup.
 app.UseStaticFiles(new StaticFileOptions
 {
-    FileProvider = new PhysicalFileProvider(
-        Path.Combine(Directory.GetCurrentDirectory(), "uploads")),
+    FileProvider = new PhysicalFileProvider(uploadsRoot),
     RequestPath = "/uploads"
 });
  

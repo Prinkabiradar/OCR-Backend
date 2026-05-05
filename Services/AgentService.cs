@@ -145,7 +145,7 @@ namespace OCR_BACKEND.Services
             var fullText = string.Join("\n\n",
                 pages.Select(p => $"Page {p.PageNumber}:\n{p.ExtractedText}"));
             //gemini-3.0-pro
-            var apiKey = _config["Gemini:ApiKey"];
+            var apiKey = ResolveApiKey();
             var model = _config["Gemini:Model"] ?? "gemini-2.5-flash";
             // var url = $"https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key={apiKey}";
             var url = $"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={apiKey}";
@@ -233,6 +233,19 @@ namespace OCR_BACKEND.Services
         public async Task<DataTable> GetSummaryData(SummaryData model)
        {
             return await _agentDBHelper.GetSummaryData(model);
+        }
+
+        private string ResolveApiKey()
+        {
+            var apiKey = Environment.GetEnvironmentVariable("GEMINI_API_KEY");
+            if (string.IsNullOrWhiteSpace(apiKey))
+                apiKey = _config["Gemini:ApiKey"];
+
+            if (string.IsNullOrWhiteSpace(apiKey))
+                throw new InvalidOperationException(
+                    "Gemini API key is not configured. Set GEMINI_API_KEY or Gemini:ApiKey.");
+
+            return apiKey.Trim();
         }
     }
 }

@@ -118,9 +118,10 @@ namespace OCR_BACKEND.Services
 
         private string ResolveApiKey()
         {
-            var apiKey = _config["Gemini:ApiKey"];
+            // Server deployments should be able to override file-based settings safely.
+            var apiKey = Environment.GetEnvironmentVariable("GEMINI_API_KEY");
             if (string.IsNullOrWhiteSpace(apiKey))
-                apiKey = Environment.GetEnvironmentVariable("GEMINI_API_KEY");
+                apiKey = _config["Gemini:ApiKey"];
 
             if (string.IsNullOrWhiteSpace(apiKey))
                 throw new InvalidOperationException(

@@ -571,10 +571,41 @@ namespace OCR_BACKEND.BackgroundServices
 
         private static string NormalizeSinglePageResponse(string rawResponse)
         {
-            if (!TryParseMultiPageGeminiResponse(rawResponse, out var pagePayloads, out _) || pagePayloads.Count == 0)
-                return rawResponse;
+            if (TryParseMultiPageGeminiResponse(rawResponse, out var pagePayloads, out _) && pagePayloads.Count > 0)
+                return WrapPayloadAsGeminiResponse(pagePayloads[0]);
 
-            return WrapPayloadAsGeminiResponse(pagePayloads[0]);
+            try
+            {
+                using var responseDocument = JsonDocument.Parse(rawResponse);
+                if (!responseDocument.RootElement.TryGetProperty("candidates", out var candidates) ||
+                    candidates.ValueKind != JsonValueKind.Array ||
+                    candidates.GetArrayLength() == 0)
+                    return rawResponse;
+
+                var parts = candidates[0].GetProperty("content").GetProperty("parts");
+                var textPart = parts.EnumerateArray()
+                    .FirstOrDefault(part => part.TryGetProperty("text", out _));
+
+                if (textPart.ValueKind != JsonValueKind.Object ||
+                    !textPart.TryGetProperty("text", out var textElement))
+                    return rawResponse;
+
+                var candidateText = StripJsonCodeFences(textElement.GetString() ?? string.Empty);
+                using var payloadDocument = JsonDocument.Parse(candidateText);
+
+                if (payloadDocument.RootElement.ValueKind == JsonValueKind.Array &&
+                    payloadDocument.RootElement.GetArrayLength() > 0)
+                    return WrapPayloadAsGeminiResponse(payloadDocument.RootElement[0].Clone());
+
+                if (payloadDocument.RootElement.ValueKind == JsonValueKind.Object)
+                    return WrapPayloadAsGeminiResponse(payloadDocument.RootElement.Clone());
+
+                return rawResponse;
+            }
+            catch
+            {
+                return rawResponse;
+            }
         }
 
         private static string WrapPayloadAsGeminiResponse(JsonElement payload)
@@ -633,9 +664,56 @@ namespace OCR_BACKEND.BackgroundServices
                 .Replace("\\n", "\n", StringComparison.Ordinal)
                 .Replace("\\r", "\r", StringComparison.Ordinal);
 
+            cleaned = TryUnwrapExtractedTextJson(cleaned);
             cleaned = WebUtility.HtmlDecode(cleaned);
             cleaned = Regex.Replace(cleaned, @"</?(html|head|body)\b[^>]*>", string.Empty, RegexOptions.IgnoreCase);
             return cleaned.Trim();
+        }
+
+        private static string TryUnwrapExtractedTextJson(string value)
+        {
+            try
+            {
+                var candidate = StripJsonCodeFences(value).Trim();
+                using var json = JsonDocument.Parse(candidate);
+                return ExtractTextFromJsonElement(json.RootElement)?.Trim() ?? value;
+            }
+            catch
+            {
+                return value;
+            }
+        }
+
+        private static string? ExtractTextFromJsonElement(JsonElement element)
+        {
+            if (element.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in element.EnumerateArray())
+                {
+                    var extracted = ExtractTextFromJsonElement(item);
+                    if (!string.IsNullOrWhiteSpace(extracted))
+                        return extracted;
+                }
+
+                return null;
+            }
+
+            if (element.ValueKind != JsonValueKind.Object)
+                return null;
+
+            if (element.TryGetProperty("extracted_text", out var extractedText) &&
+                extractedText.ValueKind == JsonValueKind.String)
+            {
+                return extractedText.GetString();
+            }
+
+            if (element.TryGetProperty("text", out var text) &&
+                text.ValueKind == JsonValueKind.String)
+            {
+                return text.GetString();
+            }
+
+            return null;
         }
 
         private static bool IsRetryableResponse(string json) =>

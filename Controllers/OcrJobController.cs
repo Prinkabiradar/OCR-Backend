@@ -28,6 +28,17 @@ namespace OCR_BACKEND.Controllers
                 if (request.Files == null || request.Files.Count == 0)
                     return BadRequest(new { message = "No files uploaded" });
 
+                // ── Check Gemini API health before proceeding ──────────────────────
+                var (isHealthy, healthMessage) = await _service.CheckGeminiHealth(request.GeminiModel, ct);
+                if (!isHealthy)
+                {
+                    return StatusCode(503, new 
+                    { 
+                        message = "Cannot process documents at this time",
+                        details = healthMessage
+                    });
+                }
+
                 var jobId = await _service.UploadAndEnqueue(request.Files, request.GeminiModel, ct);
 
                 return Ok(new
@@ -141,6 +152,43 @@ namespace OCR_BACKEND.Controllers
             catch (Exception ex)
             {
                 return BadRequest(new { message = ex.Message });
+            }
+        }
+
+        [HttpGet("CheckGeminiHealth")]
+        public async Task<IActionResult> CheckGeminiHealth([FromQuery] string? model = null, CancellationToken ct = default)
+        {
+            try
+            {
+                var (isHealthy, message) = await _service.CheckGeminiHealth(model, ct);
+                
+                if (isHealthy)
+                {
+                    return Ok(new 
+                    { 
+                        status = "healthy",
+                        message = message,
+                        canProcess = true
+                    });
+                }
+                else
+                {
+                    return StatusCode(503, new 
+                    { 
+                        status = "unavailable",
+                        message = message,
+                        canProcess = false
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(503, new 
+                { 
+                    status = "error",
+                    message = $"Health check failed: {ex.Message}",
+                    canProcess = false
+                });
             }
         }
     }

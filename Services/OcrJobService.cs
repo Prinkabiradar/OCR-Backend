@@ -16,6 +16,7 @@ namespace OCR_BACKEND.Services
         Task<DataTable> GetOcrJobResults(Guid jobId);
         Task<OcrJobResult> RetryResult(Guid jobId, string fileName, string? geminiModel = null, CancellationToken ct = default);
         Task CancelJob(Guid jobId, CancellationToken ct = default);
+        Task<(bool IsHealthy, string Message)> CheckGeminiHealth(string? modelOverride = null, CancellationToken ct = default);
     }
 
     public class OcrJobService : IOcrJobService
@@ -574,11 +575,21 @@ namespace OCR_BACKEND.Services
 
                 var candidateText = StripJsonCodeFences(textElement.GetString() ?? string.Empty);
                 using var payloadDocument = JsonDocument.Parse(candidateText);
-                if (payloadDocument.RootElement.ValueKind != JsonValueKind.Array ||
-                    payloadDocument.RootElement.GetArrayLength() == 0)
+                JsonElement payload;
+                if (payloadDocument.RootElement.ValueKind == JsonValueKind.Array &&
+                    payloadDocument.RootElement.GetArrayLength() > 0)
+                {
+                    payload = payloadDocument.RootElement[0].Clone();
+                }
+                else if (payloadDocument.RootElement.ValueKind == JsonValueKind.Object)
+                {
+                    payload = payloadDocument.RootElement.Clone();
+                }
+                else
+                {
                     return rawResponse;
+                }
 
-                var payload = payloadDocument.RootElement[0].Clone();
                 return JsonSerializer.Serialize(new
                 {
                     candidates = new[]
@@ -636,9 +647,56 @@ namespace OCR_BACKEND.Services
                 .Replace("\\n", "\n", StringComparison.Ordinal)
                 .Replace("\\r", "\r", StringComparison.Ordinal);
 
+            cleaned = TryUnwrapExtractedTextJson(cleaned);
             cleaned = WebUtility.HtmlDecode(cleaned);
             cleaned = Regex.Replace(cleaned, @"</?(html|head|body)\b[^>]*>", string.Empty, RegexOptions.IgnoreCase);
             return cleaned.Trim();
+        }
+
+        private static string TryUnwrapExtractedTextJson(string value)
+        {
+            try
+            {
+                var candidate = StripJsonCodeFences(value).Trim();
+                using var json = JsonDocument.Parse(candidate);
+                return ExtractTextFromJsonElement(json.RootElement)?.Trim() ?? value;
+            }
+            catch
+            {
+                return value;
+            }
+        }
+
+        private static string? ExtractTextFromJsonElement(JsonElement element)
+        {
+            if (element.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in element.EnumerateArray())
+                {
+                    var extracted = ExtractTextFromJsonElement(item);
+                    if (!string.IsNullOrWhiteSpace(extracted))
+                        return extracted;
+                }
+
+                return null;
+            }
+
+            if (element.ValueKind != JsonValueKind.Object)
+                return null;
+
+            if (element.TryGetProperty("extracted_text", out var extractedText) &&
+                extractedText.ValueKind == JsonValueKind.String)
+            {
+                return extractedText.GetString();
+            }
+
+            if (element.TryGetProperty("text", out var text) &&
+                text.ValueKind == JsonValueKind.String)
+            {
+                return text.GetString();
+            }
+
+            return null;
         }
 
         private static string StripJsonCodeFences(string value)
@@ -666,5 +724,11 @@ namespace OCR_BACKEND.Services
                 ".pdf" => "application/pdf",
                 _ => "application/octet-stream"
             };
+
+        // ── Check Gemini API health before processing large batches ────────
+        public async Task<(bool IsHealthy, string Message)> CheckGeminiHealth(string? modelOverride = null, CancellationToken ct = default)
+        {
+            return await _gemini.CheckGeminiHealth(modelOverride, ct);
+        }
     }
 }

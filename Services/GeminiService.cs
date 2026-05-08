@@ -116,6 +116,68 @@ namespace OCR_BACKEND.Services
             return responseBody;
         }
 
+        // ── Health check to verify Gemini API is available and responsive ────
+        public async Task<(bool IsHealthy, string Message)> CheckGeminiHealth(string? modelOverride = null, CancellationToken ct = default)
+        {
+            try
+            {
+                var apiKey = ResolveApiKey();
+                var model = string.IsNullOrWhiteSpace(modelOverride)
+                    ? (_config["Gemini:Model"] ?? "gemini-2.5-flash")
+                    : modelOverride.Trim();
+
+                // Send a minimal test request to check API availability
+                var testBody = new
+                {
+                    contents = new[]
+                    {
+                        new {
+                            parts = new[]
+                            {
+                                new { text = "Respond with 'OK'" }
+                            }
+                        }
+                    }
+                };
+
+                var json = JsonSerializer.Serialize(testBody);
+                var response = await _http.PostAsync(
+                    $"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={apiKey}",
+                    new StringContent(json, Encoding.UTF8, "application/json"),
+                    ct);
+
+                var responseBody = await response.Content.ReadAsStringAsync(ct);
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    if ((int)response.StatusCode == 503)
+                        return (false, "Gemini API is temporarily unavailable (503 Service Unavailable). Please try again later.");
+                    
+                    if ((int)response.StatusCode == 429)
+                        return (false, "Gemini API is experiencing high demand (429 Too Many Requests). Please try again later.");
+                    
+                    if ((int)response.StatusCode == 500 || (int)response.StatusCode >= 502)
+                        return (false, $"Gemini API server error ({(int)response.StatusCode}). Please try again later.");
+                    
+                    return (false, $"Gemini API health check failed: {responseBody}");
+                }
+
+                return (true, "Gemini API is healthy and ready to process documents.");
+            }
+            catch (HttpRequestException ex)
+            {
+                return (false, $"Cannot connect to Gemini API: {ex.Message}. Please check your internet connection.");
+            }
+            catch (TaskCanceledException)
+            {
+                return (false, "Gemini API health check timed out. Please try again.");
+            }
+            catch (Exception ex)
+            {
+                return (false, $"Unexpected error checking Gemini health: {ex.Message}");
+            }
+        }
+
         private string ResolveApiKey()
         {
             // Server deployments should be able to override file-based settings safely.

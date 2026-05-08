@@ -33,17 +33,17 @@ namespace OCR_BACKEND.Controllers
         {
             try
             {
-                var userClaims = HttpContext.User;
-                var idClaim = userClaims.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-                var roleClaim = userClaims.FindFirst(ClaimTypes.Role)?.Value;
+                //var userClaims = HttpContext.User;
+                //var idClaim = userClaims.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+                //var roleClaim = userClaims.FindFirst(ClaimTypes.Role)?.Value;
 
-                if (!int.TryParse(idClaim, out _))
-                    return BadRequest("Invalid user ID.");
+                //if (!int.TryParse(idClaim, out _))
+                //    return BadRequest("Invalid user ID.");
 
-                if (!int.TryParse(roleClaim, out int roleId))
-                    return BadRequest("Invalid role ID in token.");
+                //if (!int.TryParse(roleClaim, out int roleId))
+                //    return BadRequest("Invalid role ID in token.");
 
-                request.RoleId = roleId;
+                //request.RoleId = roleId;
 
                 DataTable response = await _service.GetDocumentPagesByDocument(request);
 
@@ -166,17 +166,17 @@ namespace OCR_BACKEND.Controllers
         {
             try
             {
-                var userClaims = HttpContext.User;
-                var idClaim = userClaims.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-                var roleClaim = userClaims.FindFirst(ClaimTypes.Role)?.Value;
+                //var userClaims = HttpContext.User;
+                //var idClaim = userClaims.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+                //var roleClaim = userClaims.FindFirst(ClaimTypes.Role)?.Value;
 
-                if (!int.TryParse(idClaim, out _))
-                    return BadRequest("Invalid user ID.");
+                //if (!int.TryParse(idClaim, out _))
+                //    return BadRequest("Invalid user ID.");
 
-                if (!int.TryParse(roleClaim, out int roleId))
-                    return BadRequest("Invalid role ID in token.");
+                //if (!int.TryParse(roleClaim, out int roleId))
+                //    return BadRequest("Invalid role ID in token.");
 
-                request.RoleId = roleId;
+                //request.RoleId = roleId;
 
                 DataTable response = await _service.GetDocumentPagesByDocument(request);
 

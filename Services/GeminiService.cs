@@ -43,7 +43,7 @@ namespace OCR_BACKEND.Services
                             ""page"": 1,
                             ""extracted_text"": ""<HTML content preserving headings, paragraphs, bold, italics, tables, and layout>"",
                             ""suggested_document_type"": ""<Letter|Poem|Novel|Book|Certificate|Invoice|Report|Legal|Article|Receipt|Form|Contract|Newspaper>"",
-                            ""suggested_document_name"": ""<title or short descriptive name, max 10 words>""
+                            ""suggested_document_name"": ""<structured descriptive title>""
                           }
                         ]
  
@@ -53,6 +53,11 @@ namespace OCR_BACKEND.Services
                         - Preserve structure and layout as much as possible
                         - Maintain line breaks
                         - Try to reconstruct tables accurately
+                        - suggested_document_name MUST be a structured, descriptive title (8-20 words) based on the document content
+                        - Prefer this pattern for letters: ""Letter by <Sender> to <Recipient> on <D Month YYYY>""
+                        - For other documents, use: ""<Document Type> - <Primary Subject/Entity> - <Date or Period>""
+                        - Use full names when available; if a field is missing, omit it naturally (do not use placeholders)
+                        - Keep capitalization/title casing clean and readable
                         - NO markdown
                         - NO explanation
                         - Return ONLY JSON"
@@ -62,7 +67,7 @@ namespace OCR_BACKEND.Services
                         {
                           ""extracted_text"": ""<HTML content preserving headings, paragraphs, bold, italics, tables, and layout>"",
                           ""suggested_document_type"": ""<Letter|Poem|Novel|Book|Certificate|Invoice|Report|Legal|Article|Receipt|Form|Contract|Newspaper>"",
-                          ""suggested_document_name"": ""<title or short descriptive name, max 10 words>""
+                          ""suggested_document_name"": ""<structured descriptive title>""
                         }
  
                         Rules:
@@ -70,6 +75,11 @@ namespace OCR_BACKEND.Services
                         - Preserve layout as much as possible
                         - Use semantic HTML tags
                         - Keep tables intact
+                        - suggested_document_name MUST be a structured, descriptive title (8-20 words) based on the document content
+                        - Prefer this pattern for letters: ""Letter by <Sender> to <Recipient> on <D Month YYYY>""
+                        - For other documents, use: ""<Document Type> - <Primary Subject/Entity> - <Date or Period>""
+                        - Use full names when available; if a field is missing, omit it naturally (do not use placeholders)
+                        - Keep capitalization/title casing clean and readable
                         - NO markdown
                         - NO explanation
                         - Return ONLY JSON";

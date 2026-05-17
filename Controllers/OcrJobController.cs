@@ -11,10 +11,12 @@ namespace OCR_BACKEND.Controllers
     public class OcrJobController : ControllerBase
     {
         private readonly IOcrJobService _service;
+        private readonly IConfiguration _config;
 
-        public OcrJobController(IOcrJobService service)
+        public OcrJobController(IOcrJobService service, IConfiguration config)
         {
             _service = service;
+            _config = config;
         }
 
         [HttpPost("UploadImages")]
@@ -28,23 +30,27 @@ namespace OCR_BACKEND.Controllers
                 if (request.Files == null || request.Files.Count == 0)
                     return BadRequest(new { message = "No files uploaded" });
 
-                // ── Check Gemini API health before proceeding ──────────────────────
-                var (isHealthy, healthMessage) = await _service.CheckGeminiHealth(request.GeminiModel, ct);
-                if (!isHealthy)
+                var modelCandidates = BuildModelCandidates(request.GeminiModel);
+                var resolvedModel = await ResolveFirstHealthyModel(modelCandidates, ct);
+                if (!resolvedModel.IsHealthy || string.IsNullOrWhiteSpace(resolvedModel.Model))
                 {
                     return StatusCode(503, new 
                     { 
                         message = "Cannot process documents at this time",
-                        details = healthMessage
+                        details = resolvedModel.Message,
+                        triedModels = modelCandidates
                     });
                 }
 
-                var jobId = await _service.UploadAndEnqueue(request.Files, request.GeminiModel, ct);
+                var jobId = await _service.UploadAndEnqueue(request.Files, resolvedModel.Model, ct);
 
                 return Ok(new
                 {
                     message = $"{request.Files.Count} files queued successfully",
                     JobId = jobId,
+                    selectedModel = resolvedModel.Model,
+                    fallbackUsed = !string.IsNullOrWhiteSpace(request.GeminiModel) &&
+                                   !string.Equals(request.GeminiModel.Trim(), resolvedModel.Model, StringComparison.OrdinalIgnoreCase),
                     StatusUrl = $"/api/OcrJob/GetOcrJobById?jobId={jobId}"
                 });
             }
@@ -127,8 +133,26 @@ namespace OCR_BACKEND.Controllers
                 if (request.JobId == Guid.Empty || string.IsNullOrWhiteSpace(request.FileName))
                     return BadRequest(new { message = "JobId and FileName are required." });
 
-                var result = await _service.RetryResult(request.JobId, request.FileName, request.GeminiModel, ct);
-                return Ok(result);
+                var modelCandidates = BuildModelCandidates(request.GeminiModel);
+                var resolvedModel = await ResolveFirstHealthyModel(modelCandidates, ct);
+                if (!resolvedModel.IsHealthy || string.IsNullOrWhiteSpace(resolvedModel.Model))
+                {
+                    return StatusCode(503, new
+                    {
+                        message = "Cannot retry OCR at this time",
+                        details = resolvedModel.Message,
+                        triedModels = modelCandidates
+                    });
+                }
+
+                var result = await _service.RetryResult(request.JobId, request.FileName, resolvedModel.Model, ct);
+                return Ok(new
+                {
+                    result,
+                    selectedModel = resolvedModel.Model,
+                    fallbackUsed = !string.IsNullOrWhiteSpace(request.GeminiModel) &&
+                                   !string.Equals(request.GeminiModel.Trim(), resolvedModel.Model, StringComparison.OrdinalIgnoreCase)
+                });
             }
             catch (Exception ex)
             {
@@ -160,14 +184,17 @@ namespace OCR_BACKEND.Controllers
         {
             try
             {
-                var (isHealthy, message) = await _service.CheckGeminiHealth(model, ct);
-                
-                if (isHealthy)
+                var modelCandidates = BuildModelCandidates(model);
+                var resolvedModel = await ResolveFirstHealthyModel(modelCandidates, ct);
+
+                if (resolvedModel.IsHealthy && !string.IsNullOrWhiteSpace(resolvedModel.Model))
                 {
                     return Ok(new 
                     { 
                         status = "healthy",
-                        message = message,
+                        message = resolvedModel.Message,
+                        selectedModel = resolvedModel.Model,
+                        triedModels = modelCandidates,
                         canProcess = true
                     });
                 }
@@ -176,7 +203,8 @@ namespace OCR_BACKEND.Controllers
                     return StatusCode(503, new 
                     { 
                         status = "unavailable",
-                        message = message,
+                        message = resolvedModel.Message,
+                        triedModels = modelCandidates,
                         canProcess = false
                     });
                 }
@@ -190,6 +218,52 @@ namespace OCR_BACKEND.Controllers
                     canProcess = false
                 });
             }
+        }
+
+        private List<string> BuildModelCandidates(string? requestedModel)
+        {
+            var models = new List<string>();
+
+            if (!string.IsNullOrWhiteSpace(requestedModel))
+                models.Add(requestedModel.Trim());
+
+            var primaryModel = (_config["Gemini:Model"] ?? "gemini-2.5-flash").Trim();
+            if (!string.IsNullOrWhiteSpace(primaryModel))
+                models.Add(primaryModel);
+
+            var configuredFallbacks = _config.GetSection("Gemini:FallbackModels").Get<string[]>() ?? Array.Empty<string>();
+            foreach (var fallback in configuredFallbacks)
+            {
+                if (!string.IsNullOrWhiteSpace(fallback))
+                    models.Add(fallback.Trim());
+            }
+
+            // Safe defaults if no explicit fallback list is configured.
+            models.Add("gemini-2.5-flash");
+            models.Add("gemini-2.0-flash");
+
+            return models
+                .Where(m => !string.IsNullOrWhiteSpace(m))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
+        private async Task<(bool IsHealthy, string? Model, string Message)> ResolveFirstHealthyModel(
+            IEnumerable<string> models,
+            CancellationToken ct)
+        {
+            string? lastError = null;
+
+            foreach (var model in models)
+            {
+                var (isHealthy, message) = await _service.CheckGeminiHealth(model, ct);
+                if (isHealthy)
+                    return (true, model, message);
+
+                lastError = $"{model}: {message}";
+            }
+
+            return (false, null, lastError ?? "No Gemini model candidates were available.");
         }
     }
 }

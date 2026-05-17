@@ -2,7 +2,6 @@
 using OCR_BACKEND.Queue;
 using OCR_BACKEND.Services;
 using System.Data;
-using System.Net;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
@@ -83,7 +82,7 @@ namespace OCR_BACKEND.Services
             foreach (var file in files)
             {
                 var safeName = SanitiseFileName(file.FileName);
-                var destPath = Path.Combine(originalsDir, safeName);
+                var destPath = BuildUniqueDestinationPath(originalsDir, safeName);
                 await using var fs = File.Create(destPath);
                 await file.CopyToAsync(fs, ct);
                 uploadedPaths.Add(destPath);
@@ -395,6 +394,24 @@ namespace OCR_BACKEND.Services
             return name;
         }
 
+        private static string BuildUniqueDestinationPath(string directory, string safeFileName)
+        {
+            var fileNameWithoutExt = Path.GetFileNameWithoutExtension(safeFileName);
+            var extension = Path.GetExtension(safeFileName);
+            var candidatePath = Path.Combine(directory, safeFileName);
+            var suffix = 1;
+
+            while (File.Exists(candidatePath))
+            {
+                candidatePath = Path.Combine(
+                    directory,
+                    $"{fileNameWithoutExt}_{suffix}{extension}");
+                suffix++;
+            }
+
+            return candidatePath;
+        }
+
         private async Task<OcrJobResult> BuildRetriedResultAsync(
             OcrJobResult existing,
             string absoluteOriginalPath,
@@ -648,9 +665,7 @@ namespace OCR_BACKEND.Services
                 .Replace("\\r", "\r", StringComparison.Ordinal);
 
             cleaned = TryUnwrapExtractedTextJson(cleaned);
-            cleaned = WebUtility.HtmlDecode(cleaned);
-            cleaned = Regex.Replace(cleaned, @"</?(html|head|body)\b[^>]*>", string.Empty, RegexOptions.IgnoreCase);
-            return cleaned.Trim();
+            return ExtractedTextSanitizer.ToPlainBlackFriendlyText(cleaned);
         }
 
         private static string TryUnwrapExtractedTextJson(string value)

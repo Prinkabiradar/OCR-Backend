@@ -104,7 +104,7 @@ namespace OCR_BACKEND.Services
 
             var json = JsonSerializer.Serialize(body);
 
-            // ✅ Correct model name — gemini-2.0-flash exists and is fast
+            // Model name is resolved from request/config. Keep defaults on supported Gemini versions.
             var response = await _http.PostAsync(
       $"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={apiKey}",
       new StringContent(json, Encoding.UTF8, "application/json")

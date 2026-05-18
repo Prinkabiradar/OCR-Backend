@@ -258,8 +258,16 @@ namespace OCR_BACKEND.Controllers
             }
 
             // Safe defaults if no explicit fallback list is configured.
+            // Keep this list aligned with currently supported models.
+            models.Add("gemini-3.1-pro-preview");
+            models.Add("gemini-3.1-pro-preview-customtools");
+            models.Add("gemini-3-flash-preview");
+            models.Add("gemini-3.1-flash-lite-preview");
             models.Add("gemini-2.5-flash");
+            models.Add("gemini-2.5-pro");
             models.Add("gemini-2.0-flash");
+            models.Add("gemini-1.5-flash");
+            models.Add("gemini-1.5-pro");
 
             return models
                 .Where(m => !string.IsNullOrWhiteSpace(m))
@@ -271,7 +279,7 @@ namespace OCR_BACKEND.Controllers
             IEnumerable<string> models,
             CancellationToken ct)
         {
-            string? lastError = null;
+            var errors = new List<string>();
 
             foreach (var model in models)
             {
@@ -279,10 +287,14 @@ namespace OCR_BACKEND.Controllers
                 if (isHealthy)
                     return (true, model, message);
 
-                lastError = $"{model}: {message}";
+                errors.Add($"{model}: {message}");
             }
 
-            return (false, null, lastError ?? "No Gemini model candidates were available.");
+            var combinedError = errors.Count == 0
+                ? "No Gemini model candidates were available."
+                : string.Join(" | ", errors);
+
+            return (false, null, combinedError);
         }
     }
 }

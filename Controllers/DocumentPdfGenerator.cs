@@ -149,8 +149,9 @@ namespace OCR_BACKEND.Controllers
         private static void RenderBlockElement(ColumnDescriptor col, HtmlNode node, string prefix = "")
         {
             var alignment = GetAlignment(node);
+            var indent = GetIndentPadding(node);
 
-            col.Item().PaddingBottom(4).Element(el =>
+            col.Item().PaddingBottom(4).PaddingLeft(indent).Element(el =>
             {
                 var aligned = alignment switch
                 {
@@ -171,8 +172,9 @@ namespace OCR_BACKEND.Controllers
         private static void RenderHeading(ColumnDescriptor col, HtmlNode node, float fontSize)
         {
             var alignment = GetAlignment(node);
+            var indent = GetIndentPadding(node);
 
-            col.Item().PaddingTop(6).PaddingBottom(4).Element(el =>
+            col.Item().PaddingTop(6).PaddingBottom(4).PaddingLeft(indent).Element(el =>
             {
                 var aligned = alignment switch
                 {
@@ -325,6 +327,39 @@ namespace OCR_BACKEND.Controllers
                 style, @"text-align\s*:\s*(\w+)",
                 System.Text.RegularExpressions.RegexOptions.IgnoreCase);
             return match.Success ? match.Groups[1].Value.ToLower() : "left";
+        }
+
+        private static float GetIndentPadding(HtmlNode node)
+        {
+            var style = node.GetAttributeValue("style", "");
+            var styleMatch = System.Text.RegularExpressions.Regex.Match(
+                style,
+                @"(?:margin-left|padding-left|text-indent)\s*:\s*(?<num>[\d.]+)\s*(?<unit>px|em|rem|%)?",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+            if (styleMatch.Success &&
+                float.TryParse(styleMatch.Groups["num"].Value, out var value))
+            {
+                var unit = styleMatch.Groups["unit"].Value.ToLowerInvariant();
+                return unit switch
+                {
+                    "em" or "rem" => value * 12f,
+                    "%" => value * 0.5f,
+                    _ => value * 0.75f
+                };
+            }
+
+            var cls = node.GetAttributeValue("class", "");
+            var classMatch = System.Text.RegularExpressions.Regex.Match(
+                cls,
+                @"\bql-indent-(?<level>\d+)\b",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+            if (classMatch.Success &&
+                int.TryParse(classMatch.Groups["level"].Value, out var level))
+                return Math.Max(0, level) * 18f;
+
+            return 0f;
         }
 
         private static (string? color, float? fontSize) GetInlineStyle(HtmlNode node)

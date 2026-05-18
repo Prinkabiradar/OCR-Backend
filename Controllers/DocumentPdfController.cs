@@ -79,13 +79,10 @@ namespace OCR_BACKEND.Controllers
                 // Sanitize
                 string safeFileName = SanitizeFileName(baseFileName, $"Document_{request.DocumentId}");
 
-                // Final filename
-                string finalFileName = safeFileName + ".docx";
+                // Final filename must match content type.
+                string finalFileName = safeFileName + ".pdf";
 
-                Response.Headers["Content-Disposition"] =
-                    $"attachment; filename=\"{finalFileName}\"; filename*=UTF-8''{Uri.EscapeDataString(finalFileName)}";
-
-                return File(pdfBytes, "application/pdf");
+                return File(pdfBytes, "application/pdf", finalFileName);
             }
             catch (Exception ex)
             {

@@ -36,6 +36,37 @@ namespace OCR_BACKEND.Modals
         public Guid JobId { get; set; }
     }
 
+    public class VerifyOcrJobRequest
+    {
+        public Guid JobId { get; set; }
+        public int? ExpectedTotalPages { get; set; }
+    }
+
+    public class OcrPageVerificationIssue
+    {
+        public string Type { get; set; } = "";
+        public string Message { get; set; } = "";
+        public List<int> PageNumbers { get; set; } = new();
+        public List<string> Files { get; set; } = new();
+    }
+
+    public class OcrPageVerificationResult
+    {
+        public Guid JobId { get; set; }
+        public int ExpectedTotalPages { get; set; }
+        public int ProcessedResultCount { get; set; }
+        public int DetectedNumberedPageCount { get; set; }
+        public bool IsPageOrderValid { get; set; }
+        public bool HasMissingPages { get; set; }
+        public bool HasDuplicatePages { get; set; }
+        public bool HasDuplicateContent { get; set; }
+        public bool CanFinalize { get; set; }
+        public List<int> DetectedPageOrder { get; set; } = new();
+        public List<int> MissingPages { get; set; } = new();
+        public List<int> DuplicatePages { get; set; } = new();
+        public List<OcrPageVerificationIssue> Issues { get; set; } = new();
+    }
+
     public class OcrJob
     {
         public Guid JobId { get; set; }

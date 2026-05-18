@@ -179,6 +179,25 @@ namespace OCR_BACKEND.Controllers
             }
         }
 
+        [HttpPost("VerifyPageIntegrity")]
+        public async Task<IActionResult> VerifyPageIntegrity(
+            [FromBody] VerifyOcrJobRequest request,
+            CancellationToken ct)
+        {
+            try
+            {
+                if (request.JobId == Guid.Empty)
+                    return BadRequest(new { message = "JobId is required." });
+
+                var verification = await _service.VerifyPageIntegrity(request.JobId, request.ExpectedTotalPages, ct);
+                return Ok(verification);
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { message = ex.Message });
+            }
+        }
+
         [HttpGet("CheckGeminiHealth")]
         public async Task<IActionResult> CheckGeminiHealth([FromQuery] string? model = null, CancellationToken ct = default)
         {

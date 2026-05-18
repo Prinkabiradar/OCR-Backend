@@ -1,6 +1,7 @@
 ﻿using OCR_BACKEND.Modals;
 using OCR_BACKEND.Queue;
 using OCR_BACKEND.Services;
+using System.Security.Cryptography;
 using System.Data;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -16,6 +17,7 @@ namespace OCR_BACKEND.Services
         Task<OcrJobResult> RetryResult(Guid jobId, string fileName, string? geminiModel = null, CancellationToken ct = default);
         Task CancelJob(Guid jobId, CancellationToken ct = default);
         Task<(bool IsHealthy, string Message)> CheckGeminiHealth(string? modelOverride = null, CancellationToken ct = default);
+        Task<OcrPageVerificationResult> VerifyPageIntegrity(Guid jobId, int? expectedTotalPages = null, CancellationToken ct = default);
     }
 
     public class OcrJobService : IOcrJobService
@@ -386,6 +388,144 @@ namespace OCR_BACKEND.Services
             await _ocrJobDBHelper.UpdateJobStatus(jobId, "Failed", 0, "Job cancelled by user.");
         }
 
+        public async Task<OcrPageVerificationResult> VerifyPageIntegrity(Guid jobId, int? expectedTotalPages = null, CancellationToken ct = default)
+        {
+            var jobTable = await _ocrJobDBHelper.GetOcrJobById(jobId);
+            if (jobTable.Rows.Count == 0)
+                throw new InvalidOperationException("Job not found.");
+
+            var results = await _ocrJobDBHelper.GetOcrJobResults(jobId);
+            var expected = expectedTotalPages ?? GetExpectedTotalPages(jobTable.Rows[0]);
+
+            var pageOrder = new List<int>();
+            var numberedPages = new List<(int PageNumber, string FileName)>();
+            var contentHashToFiles = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+
+            foreach (DataRow row in results.Rows)
+            {
+                var fileName = row["file_name"]?.ToString() ?? string.Empty;
+                var page = ExtractPageNumber(fileName);
+                if (page is not null)
+                {
+                    pageOrder.Add(page.Value);
+                    numberedPages.Add((page.Value, fileName));
+                }
+
+                var extractedText = TryExtractGeminiExtractedText(row["ocr_text"]?.ToString());
+                if (string.IsNullOrWhiteSpace(extractedText))
+                    continue;
+
+                var normalized = NormalizeForDuplicateCompare(extractedText);
+                if (string.IsNullOrWhiteSpace(normalized))
+                    continue;
+
+                var hash = ComputeSha256(normalized);
+                if (!contentHashToFiles.TryGetValue(hash, out var files))
+                {
+                    files = new List<string>();
+                    contentHashToFiles[hash] = files;
+                }
+                files.Add(fileName);
+            }
+
+            var groupedByPage = numberedPages
+                .GroupBy(x => x.PageNumber)
+                .ToDictionary(g => g.Key, g => g.Select(v => v.FileName).ToList());
+
+            var duplicatePages = groupedByPage
+                .Where(kvp => kvp.Value.Count > 1)
+                .Select(kvp => kvp.Key)
+                .OrderBy(p => p)
+                .ToList();
+
+            var missingPages = expected > 0
+                ? Enumerable.Range(1, expected).Where(p => !groupedByPage.ContainsKey(p)).ToList()
+                : new List<int>();
+
+            var duplicateContentGroups = contentHashToFiles.Values
+                .Where(files => files.Count > 1)
+                .Select(files => files.OrderBy(f => f, StringComparer.OrdinalIgnoreCase).ToList())
+                .ToList();
+
+            var result = new OcrPageVerificationResult
+            {
+                JobId = jobId,
+                ExpectedTotalPages = expected,
+                ProcessedResultCount = results.Rows.Count,
+                DetectedNumberedPageCount = numberedPages.Count,
+                IsPageOrderValid = IsStrictlyIncreasing(pageOrder),
+                HasMissingPages = missingPages.Count > 0,
+                HasDuplicatePages = duplicatePages.Count > 0,
+                HasDuplicateContent = duplicateContentGroups.Count > 0,
+                DetectedPageOrder = pageOrder,
+                MissingPages = missingPages,
+                DuplicatePages = duplicatePages
+            };
+
+            if (!result.IsPageOrderValid)
+            {
+                result.Issues.Add(new OcrPageVerificationIssue
+                {
+                    Type = "page_order",
+                    Message = "Detected page sequence is not in ascending order.",
+                    PageNumbers = pageOrder
+                });
+            }
+
+            if (result.HasMissingPages)
+            {
+                result.Issues.Add(new OcrPageVerificationIssue
+                {
+                    Type = "missing_pages",
+                    Message = "Some page numbers are missing.",
+                    PageNumbers = missingPages
+                });
+            }
+
+            if (result.HasDuplicatePages)
+            {
+                foreach (var duplicatePage in duplicatePages)
+                {
+                    result.Issues.Add(new OcrPageVerificationIssue
+                    {
+                        Type = "duplicate_pages",
+                        Message = $"Page {duplicatePage} appears more than once.",
+                        PageNumbers = new List<int> { duplicatePage },
+                        Files = groupedByPage[duplicatePage]
+                    });
+                }
+            }
+
+            if (result.HasDuplicateContent)
+            {
+                foreach (var files in duplicateContentGroups)
+                {
+                    result.Issues.Add(new OcrPageVerificationIssue
+                    {
+                        Type = "duplicate_content",
+                        Message = "Multiple files have identical extracted OCR content.",
+                        Files = files
+                    });
+                }
+            }
+
+            if (numberedPages.Count == 0)
+            {
+                result.Issues.Add(new OcrPageVerificationIssue
+                {
+                    Type = "unverifiable_page_numbers",
+                    Message = "No numbered pages were detected in result file names (expected *_p1, *_p2, ...)."
+                });
+            }
+
+            result.CanFinalize = result.IsPageOrderValid &&
+                                 !result.HasMissingPages &&
+                                 !result.HasDuplicatePages &&
+                                 numberedPages.Count > 0;
+
+            return result;
+        }
+
         private static string SanitiseFileName(string fileName)
         {
             var name = Path.GetFileName(fileName);
@@ -744,6 +884,94 @@ namespace OCR_BACKEND.Services
         public async Task<(bool IsHealthy, string Message)> CheckGeminiHealth(string? modelOverride = null, CancellationToken ct = default)
         {
             return await _gemini.CheckGeminiHealth(modelOverride, ct);
+        }
+
+        private static int GetExpectedTotalPages(DataRow jobRow)
+        {
+            foreach (DataColumn column in jobRow.Table.Columns)
+            {
+                if (!string.Equals(column.ColumnName, "total_files", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                if (jobRow[column] == DBNull.Value)
+                    return 0;
+
+                return Convert.ToInt32(jobRow[column]);
+            }
+
+            return 0;
+        }
+
+        private static bool IsStrictlyIncreasing(List<int> values)
+        {
+            if (values.Count <= 1)
+                return true;
+
+            for (var i = 1; i < values.Count; i++)
+            {
+                if (values[i] <= values[i - 1])
+                    return false;
+            }
+
+            return true;
+        }
+
+        private static string? TryExtractGeminiExtractedText(string? rawResponse)
+        {
+            if (string.IsNullOrWhiteSpace(rawResponse))
+                return null;
+
+            try
+            {
+                using var responseDoc = JsonDocument.Parse(rawResponse);
+                if (!responseDoc.RootElement.TryGetProperty("candidates", out var candidates) ||
+                    candidates.ValueKind != JsonValueKind.Array ||
+                    candidates.GetArrayLength() == 0)
+                    return null;
+
+                var parts = candidates[0].GetProperty("content").GetProperty("parts");
+                var text = parts.EnumerateArray()
+                    .FirstOrDefault(part => part.TryGetProperty("text", out _))
+                    .GetProperty("text")
+                    .GetString();
+
+                if (string.IsNullOrWhiteSpace(text))
+                    return null;
+
+                using var payloadDoc = JsonDocument.Parse(StripJsonCodeFences(text));
+                if (payloadDoc.RootElement.ValueKind == JsonValueKind.Array &&
+                    payloadDoc.RootElement.GetArrayLength() > 0)
+                {
+                    var first = payloadDoc.RootElement[0];
+                    if (first.TryGetProperty("extracted_text", out var extracted) &&
+                        extracted.ValueKind == JsonValueKind.String)
+                        return extracted.GetString();
+                }
+
+                if (payloadDoc.RootElement.ValueKind == JsonValueKind.Object &&
+                    payloadDoc.RootElement.TryGetProperty("extracted_text", out var objectExtracted) &&
+                    objectExtracted.ValueKind == JsonValueKind.String)
+                    return objectExtracted.GetString();
+            }
+            catch
+            {
+                return null;
+            }
+
+            return null;
+        }
+
+        private static string NormalizeForDuplicateCompare(string value)
+        {
+            var collapsed = Regex.Replace(value, @"\s+", " ").Trim();
+            return collapsed.ToLowerInvariant();
+        }
+
+        private static string ComputeSha256(string value)
+        {
+            var bytes = System.Text.Encoding.UTF8.GetBytes(value);
+            var hash = SHA256.HashData(bytes);
+            return Convert.ToHexString(hash);
         }
     }
 }

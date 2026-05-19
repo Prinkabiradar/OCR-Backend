@@ -149,9 +149,9 @@ namespace OCR_BACKEND.Controllers
         private static void RenderBlockElement(ColumnDescriptor col, HtmlNode node, string prefix = "")
         {
             var alignment = GetAlignment(node);
-            var indent = GetIndentPadding(node);
+            var (indent, indentMode) = GetIndentInfo(node);
 
-            col.Item().PaddingBottom(4).PaddingLeft(indent).Element(el =>
+            col.Item().PaddingBottom(4).PaddingLeft(indentMode == "full" ? indent : 0).Element(el =>
             {
                 var aligned = alignment switch
                 {
@@ -164,6 +164,14 @@ namespace OCR_BACKEND.Controllers
                 {
                     if (!string.IsNullOrEmpty(prefix))
                         t.Span(prefix);
+                    
+                    // For first-line indent, add spaces to first span
+                    if (indentMode == "first-line" && indent > 0)
+                    {
+                        int spaceCount = (int)Math.Round(indent / 3);
+                        t.Span(new string(' ', spaceCount));
+                    }
+                    
                     RenderInlineNodes(t, node.ChildNodes);
                 });
             });
@@ -172,9 +180,9 @@ namespace OCR_BACKEND.Controllers
         private static void RenderHeading(ColumnDescriptor col, HtmlNode node, float fontSize)
         {
             var alignment = GetAlignment(node);
-            var indent = GetIndentPadding(node);
+            var (indent, indentMode) = GetIndentInfo(node);
 
-            col.Item().PaddingTop(6).PaddingBottom(4).PaddingLeft(indent).Element(el =>
+            col.Item().PaddingTop(6).PaddingBottom(4).PaddingLeft(indentMode == "full" ? indent : 0).Element(el =>
             {
                 var aligned = alignment switch
                 {
@@ -186,6 +194,14 @@ namespace OCR_BACKEND.Controllers
                 aligned.Text(t =>
                 {
                     t.DefaultTextStyle(s => s.Bold().FontSize(fontSize));
+                    
+                    // For first-line indent, add spaces to first span
+                    if (indentMode == "first-line" && indent > 0)
+                    {
+                        int spaceCount = (int)Math.Round(indent / 3);
+                        t.Span(new string(' ', spaceCount));
+                    }
+                    
                     RenderInlineNodes(t, node.ChildNodes);
                 });
             });
@@ -329,26 +345,50 @@ namespace OCR_BACKEND.Controllers
             return match.Success ? match.Groups[1].Value.ToLower() : "left";
         }
 
-        private static float GetIndentPadding(HtmlNode node)
+        private static (float indent, string mode) GetIndentInfo(HtmlNode node)
         {
             var style = node.GetAttributeValue("style", "");
+            var dataIndentMode = node.GetAttributeValue("data-indent-mode", "first-line");
+            
+            // Check for text-indent in style (first-line indentation)
+            var textIndentMatch = System.Text.RegularExpressions.Regex.Match(
+                style,
+                @"text-indent\s*:\s*(?<num>[\d.]+)\s*(?<unit>em|rem|px)?",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            
+            if (textIndentMatch.Success &&
+                float.TryParse(textIndentMatch.Groups["num"].Value, out var textIndentValue))
+            {
+                var unit = textIndentMatch.Groups["unit"].Value.ToLowerInvariant();
+                var indent = unit switch
+                {
+                    "em" or "rem" => textIndentValue * 12f,
+                    _ => textIndentValue * 0.75f
+                };
+                return (indent, "first-line");
+            }
+            
+            // Check for margin-left or padding-left in style (full paragraph indentation)
             var styleMatch = System.Text.RegularExpressions.Regex.Match(
                 style,
-                @"(?:margin-left|padding-left|text-indent)\s*:\s*(?<num>[\d.]+)\s*(?<unit>px|em|rem|%)?",
+                @"(?:margin-left|padding-left)\s*:\s*(?<num>[\d.]+)\s*(?<unit>px|em|rem|%)?",
                 System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
             if (styleMatch.Success &&
                 float.TryParse(styleMatch.Groups["num"].Value, out var value))
             {
                 var unit = styleMatch.Groups["unit"].Value.ToLowerInvariant();
-                return unit switch
+                var indent = unit switch
                 {
                     "em" or "rem" => value * 12f,
                     "%" => value * 0.5f,
                     _ => value * 0.75f
                 };
+                // Margin-left is full paragraph indentation
+                return (indent, "full");
             }
 
+            // Check for indent classes
             var cls = node.GetAttributeValue("class", "");
             var classMatch = System.Text.RegularExpressions.Regex.Match(
                 cls,
@@ -357,9 +397,15 @@ namespace OCR_BACKEND.Controllers
 
             if (classMatch.Success &&
                 int.TryParse(classMatch.Groups["level"].Value, out var level))
-                return Math.Max(0, level) * 18f;
+                return (Math.Max(0, level) * 18f, dataIndentMode == "full" ? "full" : "first-line");
 
-            return 0f;
+            return (0f, "first-line");
+        }
+
+        private static float GetIndentPadding(HtmlNode node)
+        {
+            var (indent, _) = GetIndentInfo(node);
+            return indent;
         }
 
         private static (string? color, float? fontSize) GetInlineStyle(HtmlNode node)

@@ -30,10 +30,23 @@ namespace OCR_BACKEND.Services
                         .Split(';', StringSplitOptions.RemoveEmptyEntries)
                         .Select(part => part.Trim())
                         .Where(part =>
-                            Regex.IsMatch(part, @"^text-align\s*:\s*(left|right|center|justify)\s*$", RegexOptions.IgnoreCase) ||
-                            Regex.IsMatch(part, @"^margin-left\s*:\s*[\d.]+(px|em|rem|%)\s*$", RegexOptions.IgnoreCase) ||
-                            Regex.IsMatch(part, @"^padding-left\s*:\s*[\d.]+(px|em|rem|%)\s*$", RegexOptions.IgnoreCase) ||
-                            Regex.IsMatch(part, @"^text-indent\s*:\s*[\d.]+(px|em|rem|%)\s*$", RegexOptions.IgnoreCase))
+                            // Text alignment
+                            Regex.IsMatch(part, @"^text-align\s*:\s*(left|right|center|justify)\s*!?$", RegexOptions.IgnoreCase) ||
+                            // Indentation via margins (ngx-editor, Quill)
+                            Regex.IsMatch(part, @"^margin-left\s*:\s*[\d.]+(px|em|rem|%)\s*!?$", RegexOptions.IgnoreCase) ||
+                            Regex.IsMatch(part, @"^margin-right\s*:\s*[\d.]+(px|em|rem|%)\s*!?$", RegexOptions.IgnoreCase) ||
+                            Regex.IsMatch(part, @"^margin-inline-start\s*:\s*[\d.]+(px|em|rem|%)\s*!?$", RegexOptions.IgnoreCase) ||
+                            Regex.IsMatch(part, @"^margin-inline-end\s*:\s*[\d.]+(px|em|rem|%)\s*!?$", RegexOptions.IgnoreCase) ||
+                            // Indentation via padding
+                            Regex.IsMatch(part, @"^padding-left\s*:\s*[\d.]+(px|em|rem|%)\s*!?$", RegexOptions.IgnoreCase) ||
+                            Regex.IsMatch(part, @"^padding-right\s*:\s*[\d.]+(px|em|rem|%)\s*!?$", RegexOptions.IgnoreCase) ||
+                            Regex.IsMatch(part, @"^padding-inline-start\s*:\s*[\d.]+(px|em|rem|%)\s*!?$", RegexOptions.IgnoreCase) ||
+                            Regex.IsMatch(part, @"^padding-inline-end\s*:\s*[\d.]+(px|em|rem|%)\s*!?$", RegexOptions.IgnoreCase) ||
+                            // Text indent (first line indent)
+                            Regex.IsMatch(part, @"^text-indent\s*:\s*[\d.-]+(px|em|rem|%)\s*!?$", RegexOptions.IgnoreCase) ||
+                            // Color styles (if needed)
+                            Regex.IsMatch(part, @"^color\s*:\s*", RegexOptions.IgnoreCase) ||
+                            Regex.IsMatch(part, @"^background-color\s*:\s*", RegexOptions.IgnoreCase))
                         .ToList();
 
                     return allowed.Count == 0
@@ -43,6 +56,7 @@ namespace OCR_BACKEND.Services
                 RegexOptions.IgnoreCase | RegexOptions.Singleline);
 
             // Keep only known safe alignment/indent classes used by rich text editors.
+            // Supports: Quill (ql-*), ngx-editor, and other editors
             cleaned = Regex.Replace(
                 cleaned,
                 @"\sclass\s*=\s*(['""])(.*?)\1",
@@ -52,8 +66,20 @@ namespace OCR_BACKEND.Services
                     var allowed = classValue
                         .Split(' ', StringSplitOptions.RemoveEmptyEntries)
                         .Where(c =>
+                            // Quill alignment classes
                             Regex.IsMatch(c, @"^ql-align-(left|right|center|justify)$", RegexOptions.IgnoreCase) ||
-                            Regex.IsMatch(c, @"^ql-indent-\d+$", RegexOptions.IgnoreCase))
+                            // Quill indent classes (ql-indent-1, ql-indent-2, etc.)
+                            Regex.IsMatch(c, @"^ql-indent-\d+$", RegexOptions.IgnoreCase) ||
+                            // ngx-editor indent classes
+                            Regex.IsMatch(c, @"^indent-\d+$", RegexOptions.IgnoreCase) ||
+                            Regex.IsMatch(c, @"^editor-indent-\d+$", RegexOptions.IgnoreCase) ||
+                            // ProseMirror indent classes
+                            Regex.IsMatch(c, @"^pm-indent-\d+$", RegexOptions.IgnoreCase) ||
+                            // Generic indent/level classes
+                            Regex.IsMatch(c, @"^(indent|level)-\d+$", RegexOptions.IgnoreCase) ||
+                            // Generic alignment classes
+                            Regex.IsMatch(c, @"^text-(left|right|center|justify)$", RegexOptions.IgnoreCase) ||
+                            Regex.IsMatch(c, @"^align-(left|right|center|justify)$", RegexOptions.IgnoreCase))
                         .ToList();
 
                     return allowed.Count == 0
@@ -62,7 +88,17 @@ namespace OCR_BACKEND.Services
                 },
                 RegexOptions.IgnoreCase | RegexOptions.Singleline);
 
+            // Preserve blockquote, lists, and list items (used for hierarchical indentation)
+            // Already preserved by not removing them
+
+            // Remove only truly unsafe elements
             cleaned = Regex.Replace(cleaned, @"</?font\b[^>]*>", string.Empty, RegexOptions.IgnoreCase);
+            cleaned = Regex.Replace(cleaned, @"<script\b[^>]*>.*?</script>", string.Empty, RegexOptions.IgnoreCase | RegexOptions.Singleline);
+            cleaned = Regex.Replace(cleaned, @"<iframe\b[^>]*>.*?</iframe>", string.Empty, RegexOptions.IgnoreCase | RegexOptions.Singleline);
+            cleaned = Regex.Replace(cleaned, @"<style\b[^>]*>.*?</style>", string.Empty, RegexOptions.IgnoreCase | RegexOptions.Singleline);
+
+            // Preserve data attributes that might be used for indentation (data-indent, data-level, etc.)
+            // These are already safe and won't be removed unless explicitly stripped
 
             return cleaned.Trim();
         }

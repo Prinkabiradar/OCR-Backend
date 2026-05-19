@@ -203,6 +203,24 @@ namespace OCR_BACKEND.BackgroundServices
                 var page = workItem.Pages.FirstOrDefault()
                     ?? new OcrJobPageReference(1, Path.GetFileName(workItem.OriginalSourcePath));
                 var normalizedResponse = NormalizeSinglePageResponse(rawResponse);
+                var extractedText = TryExtractGeminiExtractedText(normalizedResponse);
+
+                if (string.IsNullOrWhiteSpace(extractedText))
+                {
+                    _logger.LogWarning(
+                        "Empty OCR text detected for {File}. Retrying single-page extraction.",
+                        page.FileName);
+
+                    return await ReprocessPagesIndividuallyAsync(
+                        jobId,
+                        new OcrJobWorkItem(
+                            workItem.FilePath,
+                            workItem.OriginalSourcePath,
+                            new List<OcrJobPageReference> { page }),
+                        storageRoot,
+                        geminiModel,
+                        ct);
+                }
 
                 return new List<OcrJobResult>
                 {
@@ -711,6 +729,51 @@ namespace OCR_BACKEND.BackgroundServices
                 text.ValueKind == JsonValueKind.String)
             {
                 return text.GetString();
+            }
+
+            return null;
+        }
+
+        private static string? TryExtractGeminiExtractedText(string? rawResponse)
+        {
+            if (string.IsNullOrWhiteSpace(rawResponse))
+                return null;
+
+            try
+            {
+                using var responseDoc = JsonDocument.Parse(rawResponse);
+                if (!responseDoc.RootElement.TryGetProperty("candidates", out var candidates) ||
+                    candidates.ValueKind != JsonValueKind.Array ||
+                    candidates.GetArrayLength() == 0)
+                    return null;
+
+                var parts = candidates[0].GetProperty("content").GetProperty("parts");
+                var text = parts.EnumerateArray()
+                    .FirstOrDefault(part => part.TryGetProperty("text", out _))
+                    .GetProperty("text")
+                    .GetString();
+
+                if (string.IsNullOrWhiteSpace(text))
+                    return null;
+
+                using var payloadDoc = JsonDocument.Parse(StripJsonCodeFences(text));
+                if (payloadDoc.RootElement.ValueKind == JsonValueKind.Array &&
+                    payloadDoc.RootElement.GetArrayLength() > 0)
+                {
+                    var first = payloadDoc.RootElement[0];
+                    if (first.TryGetProperty("extracted_text", out var extracted) &&
+                        extracted.ValueKind == JsonValueKind.String)
+                        return extracted.GetString();
+                }
+
+                if (payloadDoc.RootElement.ValueKind == JsonValueKind.Object &&
+                    payloadDoc.RootElement.TryGetProperty("extracted_text", out var objectExtracted) &&
+                    objectExtracted.ValueKind == JsonValueKind.String)
+                    return objectExtracted.GetString();
+            }
+            catch
+            {
+                return null;
             }
 
             return null;

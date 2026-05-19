@@ -87,5 +87,23 @@ namespace OCR_BACKEND.Controllers
                 return BadRequest(new { message = ex.Message });
             }
         }
+        [HttpGet("GetApproveDocuments")]
+        public async Task<IActionResult> GetApproveDocuments([FromQuery] ApproveDocumentFetchRequest pagination)
+        {
+            try
+            {
+                DataTable response = await _service.GetApproveDocuments(pagination);
+                var lst = response.AsEnumerable()
+                    .Select(r => r.Table.Columns.Cast<DataColumn>()
+                        .Select(c => new KeyValuePair<string, object>(c.ColumnName, r[c.Ordinal]))
+                        .ToDictionary(z => z.Key, z => z.Value)
+                    ).ToList();
+                return Ok(lst);
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { message = ex.Message });
+            }
+        }
     }
 }

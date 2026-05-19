@@ -69,5 +69,20 @@ namespace OCR_BACKEND.Services
 
             return false;
         }
+        public async Task<DataTable> GetApproveDocuments(ApproveDocumentFetchRequest model)
+        {
+            DataTable dt = new DataTable();
+            string query = @"SELECT * FROM fn_approve_document_get(@p_startindex, @p_pagesize, @p_searchby, @p_searchcriteria)";
+            var parameters = new[]
+            {
+        new NpgsqlParameter("p_startindex", model.StartIndex),
+        new NpgsqlParameter("p_pagesize", model.PageSize),
+        new NpgsqlParameter("p_searchby", (object?)model.SearchBy ?? DBNull.Value),
+        new NpgsqlParameter("p_searchcriteria", (object?)model.SearchCriteria ?? DBNull.Value)
+    };
+            using var reader = await _sqlDBHelper.ExecuteReaderAsync(query, parameters);
+            dt.Load(reader);
+            return dt;
+        }
     }
 }

@@ -8,6 +8,7 @@ namespace OCR_BACKEND.Services
         Task<int> InsertUpdateDocument(DocumentRequest model);
         Task<DataTable> GetDocuments(DocumentFetchRequest model);
         Task<bool> ManageDocumentLock(ManageLockRequest model);
+        Task<DataTable> GetApproveDocuments(ApproveDocumentFetchRequest model);
     }
 
     public class DocumentService: IDocumentService
@@ -30,6 +31,10 @@ namespace OCR_BACKEND.Services
         public async Task<bool> ManageDocumentLock(ManageLockRequest model)
         {
             return await _sqlDBHelper.ManageDocumentLock(model);
+        }
+        public async Task<DataTable> GetApproveDocuments(ApproveDocumentFetchRequest model)
+        {
+            return await _sqlDBHelper.GetApproveDocuments(model);
         }
     }
 }

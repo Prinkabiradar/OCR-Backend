@@ -21,7 +21,11 @@ namespace OCR_BACKEND.Services
         }
         public async Task<int> InsertUpdateDocumentPage(DocumentPageRequest model)
         {
+            var before = model.ExtractedText ?? string.Empty;
             model.ExtractedText = ExtractedTextSanitizer.ToPlainBlackFriendlyText(model.ExtractedText);
+            var after = model.ExtractedText ?? string.Empty;
+            Console.WriteLine($"[DocumentPageService] ExtractedText before sanitize len={before.Length}, after len={after.Length}");
+            Console.WriteLine($"[DocumentPageService] Sanitized preview: {after.Substring(0, Math.Min(300, after.Length))}");
             return await _sqlDBHelper.InsertUpdateDocumentPage(model);
         }
         public async Task<DataTable> GetDocumentPagesByDocument(OcrDocumentRequest request)

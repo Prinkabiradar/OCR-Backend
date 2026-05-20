@@ -29,6 +29,7 @@ namespace OCR_BACKEND.Services
         private readonly IPdfToImageService _pdfProcessor;
         private readonly GeminiService _gemini;
         private readonly OcrJobCancellationRegistry _cancellationRegistry;
+        private readonly IStorageService _storage;
         private readonly ILogger<OcrJobService> _logger;
 
         private static readonly HashSet<string> _nativeImageOcr = new(StringComparer.OrdinalIgnoreCase)
@@ -49,6 +50,7 @@ namespace OCR_BACKEND.Services
             IPdfToImageService pdfProcessor,
             GeminiService gemini,
             OcrJobCancellationRegistry cancellationRegistry,
+            IStorageService storage,
             ILogger<OcrJobService> logger)
         {
             _ocrJobDBHelper = ocrJobDBHelper;
@@ -58,6 +60,7 @@ namespace OCR_BACKEND.Services
             _pdfProcessor = pdfProcessor;
             _gemini = gemini;
             _cancellationRegistry = cancellationRegistry;
+            _storage = storage;
             _logger = logger;
         }
 
@@ -71,58 +74,73 @@ namespace OCR_BACKEND.Services
             var dbJobId = await _ocrJobDBHelper.InsertOcrJob(null, 0);
             _cancellationRegistry.Register(dbJobId);
 
-            // ── 2. Create folder using the DB job_id so they always match ────────
-            var jobDir = Path.Combine(_config["FileStorage:Root"] ?? "uploads", dbJobId.ToString());
-            var originalsDir = Path.Combine(jobDir, "originals");
-            var convDir = Path.Combine(jobDir, "converted");
-
-            Directory.CreateDirectory(originalsDir);
-            Directory.CreateDirectory(convDir);
-
-            // ── 3. Save uploaded files ────────────────────────────────────────────
+            // ── 3. Save uploaded files using storage service ────────────────────
             var uploadedPaths = new List<string>();
             foreach (var file in files)
             {
                 var safeName = SanitiseFileName(file.FileName);
-                var destPath = BuildUniqueDestinationPath(originalsDir, safeName);
-                await using var fs = File.Create(destPath);
-                await file.CopyToAsync(fs, ct);
-                uploadedPaths.Add(destPath);
+                var uniqueName = BuildUniqueSafeFileName(safeName);
+                
+                // Save to storage (Digital Ocean or local)
+                var storagePath = await _storage.SaveFileAsync(
+                    dbJobId.ToString(),
+                    "originals",
+                    uniqueName,
+                    file.OpenReadStream(),
+                    ct);
+
+                uploadedPaths.Add(storagePath);
             }
 
             var ocrWorkItems = new List<OcrJobWorkItem>();
             var preExtracted = new List<OcrJobResult>();
 
             // ── 4. Classify and route every uploaded file ─────────────────────────
-            foreach (var path in uploadedPaths)
+            foreach (var storagePath in uploadedPaths)
             {
-                var ext = Path.GetExtension(path);
+                var fileName = Path.GetFileName(storagePath);
+                var ext = Path.GetExtension(storagePath);
 
                 if (_nativeImageOcr.Contains(ext))
                 {
                     ocrWorkItems.Add(new OcrJobWorkItem(
-                        path,
-                        path,
+                        storagePath,
+                        storagePath,
                         new List<OcrJobPageReference>
                         {
-                            new(1, Path.GetFileName(path))
+                            new(1, fileName)
                         }));
                     continue;
                 }
 
-
                 if (ext.Equals(".pdf", StringComparison.OrdinalIgnoreCase))
                 {
-                    // Split into individual page PDFs inside originals/
-                    var pagePaths = SplitPdfIntoPages(path, originalsDir);
+                    // Get PDF bytes from storage and split into pages
+                    var pdfBytes = await _storage.GetFileAsyncBytes(
+                        dbJobId.ToString(),
+                        "originals",
+                        fileName,
+                        ct);
 
-                    // Delete the original whole PDF — pages are now stored individually
-                    File.Delete(path);
+                    if (pdfBytes == null)
+                    {
+                        _logger.LogWarning("Could not retrieve PDF from storage: {FileName}", fileName);
+                        continue;
+                    }
 
-                    // Process each single-page PDF through the normal text/OCR classifier
+                    var pagePaths = await SplitPdfIntoPagesAsync(pdfBytes, fileName, dbJobId, ct);
+
+                    // Delete the original whole PDF from storage — pages are now stored individually
+                    await _storage.DeleteFileAsync(
+                        dbJobId.ToString(),
+                        "originals",
+                        fileName,
+                        ct);
+
+                    // Process each single-page PDF
                     foreach (var pagePath in pagePaths)
                     {
-                        var pageFileName = Path.GetFileName(pagePath); // e.g. Priyanka_CV_p1.pdf
+                        var pageFileName = Path.GetFileName(pagePath);
 
                         // Always send to Gemini OCR regardless of text/scanned
                         ocrWorkItems.Add(new OcrJobWorkItem(
@@ -130,7 +148,7 @@ namespace OCR_BACKEND.Services
                             pagePath,
                             new List<OcrJobPageReference>
                             {
-                new(1, pageFileName)
+                                new(1, pageFileName)
                             }));
                     }
                     continue;
@@ -141,60 +159,101 @@ namespace OCR_BACKEND.Services
                     if (ext.Equals(".tif", StringComparison.OrdinalIgnoreCase) ||
                         ext.Equals(".tiff", StringComparison.OrdinalIgnoreCase))
                     {
-                        var result = await _converter.ConvertAsync(path, convDir, ct);
-                        if (!result.Success)
+                        // Get file bytes from storage
+                        var tiffBytes = await _storage.GetFileAsyncBytes(
+                            dbJobId.ToString(),
+                            "originals",
+                            fileName,
+                            ct);
+
+                        if (tiffBytes == null)
                         {
-                            _logger.LogWarning("Skipping {File}: {Error}", path, result.Error);
+                            _logger.LogWarning("Could not retrieve TIFF from storage: {FileName}", fileName);
                             continue;
                         }
 
-                        var baseName = Path.GetFileNameWithoutExtension(path);
-                        var tiffPages = Directory
-                            .EnumerateFiles(convDir, $"{baseName}_p*.jpg")
+                        var result = await _converter.ConvertFromBytesAsync(
+                            tiffBytes,
+                            Path.GetExtension(fileName),
+                            ct);
+
+                        if (!result.Success)
+                        {
+                            _logger.LogWarning("Skipping {File}: {Error}", fileName, result.Error);
+                            continue;
+                        }
+
+                        var baseName = Path.GetFileNameWithoutExtension(fileName);
+                        var tiffPages = await _storage.ListFilesAsync(dbJobId.ToString(), "converted", ct);
+                        var matchingPages = tiffPages
+                            .Where(f => f.StartsWith(baseName, StringComparison.OrdinalIgnoreCase) &&
+                                       Regex.IsMatch(f, @"_p\d+\.jpg$", RegexOptions.IgnoreCase))
                             .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
                             .ToList();
 
-                        var tiffOutputs = tiffPages.Count > 0
-                            ? tiffPages.AsEnumerable()
-                            : new[] { result.OutputPath }.AsEnumerable();
+                        var tiffOutputs = matchingPages.Count > 0
+                            ? matchingPages.Select(f => $"converted/{f}").ToList()
+                            : new List<string> { result.OutputPath };
 
                         foreach (var imagePath in tiffOutputs)
                         {
+                            var imageFileName = Path.GetFileName(imagePath);
                             ocrWorkItems.Add(new OcrJobWorkItem(
                                 imagePath,
-                                path,
+                                storagePath,
                                 new List<OcrJobPageReference>
                                 {
-                                    new(1, Path.GetFileName(imagePath))
+                                    new(1, imageFileName)
                                 }));
                         }
                         continue;
                     }
 
-                    // Office → PDF → iText7
-                    var officeResult = await _converter.ConvertAsync(path, convDir, ct);
+                    // Office → PDF → processing
+                    var officeBytes = await _storage.GetFileAsyncBytes(
+                        dbJobId.ToString(),
+                        "originals",
+                        fileName,
+                        ct);
+
+                    if (officeBytes == null)
+                    {
+                        _logger.LogWarning("Could not retrieve Office file from storage: {FileName}", fileName);
+                        continue;
+                    }
+
+                    var officeResult = await _converter.ConvertFromBytesAsync(
+                        officeBytes,
+                        Path.GetExtension(fileName),
+                        ct);
+
                     if (!officeResult.Success)
                     {
-                        _logger.LogWarning("Skipping {File}: {Error}", path, officeResult.Error);
+                        _logger.LogWarning("Skipping {File}: {Error}", fileName, officeResult.Error);
                         continue;
                     }
 
                     if (Path.GetExtension(officeResult.OutputPath)
                             .Equals(".pdf", StringComparison.OrdinalIgnoreCase))
-                        await ProcessPdfAsync(officeResult.OutputPath, convDir, ocrWorkItems, preExtracted, ct);
+                    {
+                        var pdfBytes2 = await System.IO.File.ReadAllBytesAsync(officeResult.OutputPath, ct);
+                        await ProcessPdfAsyncWithBytes(pdfBytes2, Path.GetFileName(officeResult.OutputPath), dbJobId, ocrWorkItems, preExtracted, ct);
+                    }
                     else
+                    {
                         ocrWorkItems.Add(new OcrJobWorkItem(
                             officeResult.OutputPath,
-                            path,
+                            storagePath,
                             new List<OcrJobPageReference>
                             {
                                 new(1, Path.GetFileName(officeResult.OutputPath))
                             }));
+                    }
 
                     continue;
                 }
 
-                _logger.LogWarning("Skipping unsupported file: {File}", path);
+                _logger.LogWarning("Skipping unsupported file: {File}", storagePath);
             }
 
             int totalItems = preExtracted.Count + ocrWorkItems.Sum(GetWorkItemPageCount);
@@ -246,24 +305,25 @@ namespace OCR_BACKEND.Services
         }
 
         // ────────────────────────────────────────────────────────────────────
-        // PDF processing: iText7 text extraction + sub-PDFs for scanned pages
+        // PDF processing with storage service
         // ────────────────────────────────────────────────────────────────────
-        private async Task ProcessPdfAsync(
-            string pdfPath,
-            string convDir,
+        private async Task ProcessPdfAsyncWithBytes(
+            byte[] pdfBytes,
+            string fileName,
+            Guid jobId,
             List<OcrJobWorkItem> ocrWorkItems,
             List<OcrJobResult> preExtracted,
             CancellationToken ct)
         {
-            var pages = await _pdfProcessor.ExtractPagesAsync(pdfPath, convDir, ct);
+            var pages = await _pdfProcessor.ExtractPagesFromBytesAsync(pdfBytes, fileName, ct);
 
             if (pages.Count == 0)
             {
-                _logger.LogWarning("No pages extracted from {File}", pdfPath);
+                _logger.LogWarning("No pages extracted from {File}", fileName);
                 preExtracted.Add(new OcrJobResult
                 {
                     JobId = Guid.Empty,
-                    FileName = Path.GetFileName(pdfPath),
+                    FileName = fileName,
                     OcrText = "{}",
                     Success = false,
                     Error = "Could not extract any pages from PDF"
@@ -273,12 +333,12 @@ namespace OCR_BACKEND.Services
 
             var scannedCount = pages.Count(p => p.NeedsOcr);
 
-            // ✅ NEW: short-circuit if PDF is entirely text-based — skip Gemini
+            // If PDF is entirely text-based — skip Gemini
             if (scannedCount == 0)
             {
                 _logger.LogInformation(
                     "PDF {File} is fully text-based ({Count} page(s)) — skipping Gemini entirely",
-                    Path.GetFileName(pdfPath), pages.Count);
+                    fileName, pages.Count);
 
                 preExtracted.AddRange(pages.Select(p => new OcrJobResult
                 {
@@ -286,12 +346,12 @@ namespace OCR_BACKEND.Services
                     FileName = p.FileName,
                     OcrText = WrapAsGeminiJson(p.Text),
                     Success = true,
-                    FilePath = GetRelativeOriginalPath(pdfPath)
+                    FilePath = $"originals/{p.FileName}"
                 }));
                 return;
             }
 
-            // Mixed or fully scanned PDF — handle page by page
+            // Mixed or fully scanned PDF
             foreach (var page in pages)
             {
                 if (!page.NeedsOcr)
@@ -302,12 +362,8 @@ namespace OCR_BACKEND.Services
                         FileName = page.FileName,
                         OcrText = WrapAsGeminiJson(page.Text),
                         Success = true,
-                        FilePath = GetRelativeOriginalPath(pdfPath)
+                        FilePath = $"originals/{page.FileName}"
                     });
-                }
-                else
-                {
-                    continue;
                 }
             }
 
@@ -316,7 +372,7 @@ namespace OCR_BACKEND.Services
                 .GroupBy(p => p.ChunkPath!, StringComparer.OrdinalIgnoreCase)
                 .Select(group => new OcrJobWorkItem(
                     group.Key,
-                    pdfPath,
+                    fileName,
                     group.OrderBy(p => p.PageNumber)
                         .Select(p => new OcrJobPageReference(p.PageNumber, p.FileName))
                         .ToList()))
@@ -325,16 +381,53 @@ namespace OCR_BACKEND.Services
             ocrWorkItems.AddRange(chunkWorkItems);
         }
 
+        // Split PDF into individual pages and save to storage
+        private async Task<List<string>> SplitPdfIntoPagesAsync(
+            byte[] pdfBytes,
+            string fileName,
+            Guid jobId,
+            CancellationToken ct)
+        {
+            var pagePaths = new List<string>();
+            var baseName = Path.GetFileNameWithoutExtension(fileName);
+
+            using var sourceStream = new MemoryStream(pdfBytes);
+            using var reader = new iText.Kernel.Pdf.PdfReader(sourceStream);
+            using var srcDoc = new iText.Kernel.Pdf.PdfDocument(reader);
+
+            int total = srcDoc.GetNumberOfPages();
+            for (int pageNum = 1; pageNum <= total; pageNum++)
+            {
+                var pageFileName = $"{baseName}_p{pageNum}.pdf";
+                var output = new MemoryStream();
+                
+                using (var writer = new iText.Kernel.Pdf.PdfWriter(output))
+                using (var target = new iText.Kernel.Pdf.PdfDocument(writer))
+                {
+                    // Keep the MemoryStream open after iText disposes writer/target.
+                    writer.SetCloseStream(false);
+                    srcDoc.CopyPagesTo(new List<int> { pageNum }, target);
+                }
+
+                output.Position = 0;
+                
+                // Save to storage
+                await _storage.SaveFileAsync(
+                    jobId.ToString(),
+                    "originals",
+                    pageFileName,
+                    output,
+                    ct);
+
+                pagePaths.Add($"originals/{pageFileName}");
+            }
+
+            return pagePaths;
+        }
+
         // ────────────────────────────────────────────────────────────────────
         // Helpers
         // ────────────────────────────────────────────────────────────────────
-        private string GetRelativeOriginalPath(string absolutePath)
-        {
-            var root = Path.GetFullPath(_config["FileStorage:Root"] ?? "uploads");
-            var full = Path.GetFullPath(absolutePath);
-            return Path.GetRelativePath(root, full);
-        }
-
         private static string WrapAsGeminiJson(string extractedText)
         {
             var structured = System.Text.Json.JsonSerializer.Serialize(new
@@ -369,14 +462,20 @@ namespace OCR_BACKEND.Services
             if (string.IsNullOrWhiteSpace(existing.FilePath))
                 throw new InvalidOperationException("Original file path is missing for this OCR result.");
 
-            var absoluteOriginalPath = Path.Combine(
-                Path.GetFullPath(_config["FileStorage:Root"] ?? "uploads"),
-                existing.FilePath);
+            // Extract file type and file name from stored path (e.g., "originals/file.pdf" or "converted/file.jpg")
+            var pathParts = existing.FilePath.Split(new[] { '/', '\\' }, StringSplitOptions.RemoveEmptyEntries);
+            if (pathParts.Length < 2)
+                throw new InvalidOperationException("Invalid file path format in database.");
 
-            if (!File.Exists(absoluteOriginalPath))
-                throw new FileNotFoundException("Original source file could not be found.", absoluteOriginalPath);
+            var fileType = pathParts[0];  // "originals" or "converted"
+            var actualFileName = pathParts[^1];
 
-            var retried = await BuildRetriedResultAsync(existing, absoluteOriginalPath, geminiModel, ct);
+            // Get file from storage
+            var fileBytes = await _storage.GetFileAsyncBytes(jobId.ToString(), fileType, actualFileName, ct);
+            if (fileBytes == null || fileBytes.Length == 0)
+                throw new FileNotFoundException("Original source file could not be found in storage.", existing.FilePath);
+
+            var retried = await BuildRetriedResultAsync(existing, fileBytes, actualFileName, geminiModel, ct);
             await _ocrJobDBHelper.UpdateJobResult(retried);
             return retried;
         }
@@ -534,31 +633,21 @@ namespace OCR_BACKEND.Services
             return name;
         }
 
-        private static string BuildUniqueDestinationPath(string directory, string safeFileName)
+        private static string BuildUniqueSafeFileName(string safeFileName)
         {
             var fileNameWithoutExt = Path.GetFileNameWithoutExtension(safeFileName);
             var extension = Path.GetExtension(safeFileName);
-            var candidatePath = Path.Combine(directory, safeFileName);
-            var suffix = 1;
-
-            while (File.Exists(candidatePath))
-            {
-                candidatePath = Path.Combine(
-                    directory,
-                    $"{fileNameWithoutExt}_{suffix}{extension}");
-                suffix++;
-            }
-
-            return candidatePath;
+            return $"{fileNameWithoutExt}_{Guid.NewGuid():N}{extension}";
         }
 
         private async Task<OcrJobResult> BuildRetriedResultAsync(
             OcrJobResult existing,
-            string absoluteOriginalPath,
+            byte[] sourceBytes,
+            string sourceFileName,
             string? geminiModel,
             CancellationToken ct)
         {
-            var ext = Path.GetExtension(absoluteOriginalPath);
+            var ext = Path.GetExtension(sourceFileName);
             byte[] bytes;
             string contentType;
 
@@ -568,27 +657,13 @@ namespace OCR_BACKEND.Services
                 if (pageNumber is null)
                     throw new InvalidOperationException("Could not determine the PDF page number for retry.");
 
-                bytes = ExtractSinglePagePdfBytes(absoluteOriginalPath, pageNumber.Value);
+                bytes = ExtractSinglePagePdfBytes(sourceBytes, pageNumber.Value);
                 contentType = "application/pdf";
             }
             else if (_nativeImageOcr.Contains(ext))
             {
-                bytes = await File.ReadAllBytesAsync(absoluteOriginalPath, ct);
-                contentType = ResolveContentType(absoluteOriginalPath);
-            }
-            else if (ext.Equals(".tif", StringComparison.OrdinalIgnoreCase) ||
-                     ext.Equals(".tiff", StringComparison.OrdinalIgnoreCase) ||
-                     _convertible.Contains(ext))
-            {
-                bytes = await BuildRetriedBytesFromConvertedFileAsync(
-                    absoluteOriginalPath,
-                    existing.FileName,
-                    ct);
-
-                contentType = Path.GetExtension(existing.FileName)
-                    .Equals(".pdf", StringComparison.OrdinalIgnoreCase)
-                    ? "application/pdf"
-                    : "image/jpeg";
+                bytes = sourceBytes;
+                contentType = ResolveContentType(sourceFileName);
             }
             else
             {
@@ -601,78 +676,6 @@ namespace OCR_BACKEND.Services
             existing.Error = null;
             return existing;
         }
-        private static List<string> SplitPdfIntoPages(string pdfPath, string outputDir)
-        {
-            var baseName = Path.GetFileNameWithoutExtension(pdfPath);
-            var pagePaths = new List<string>();
-
-            using var reader = new iText.Kernel.Pdf.PdfReader(pdfPath);
-            using var srcDoc = new iText.Kernel.Pdf.PdfDocument(reader);
-
-            int total = srcDoc.GetNumberOfPages();
-            for (int pageNum = 1; pageNum <= total; pageNum++)
-            {
-                var outPath = Path.Combine(outputDir, $"{baseName}_p{pageNum}.pdf");
-                using var output = new MemoryStream();
-                using var writer = new iText.Kernel.Pdf.PdfWriter(outPath);
-                using var target = new iText.Kernel.Pdf.PdfDocument(writer);
-                srcDoc.CopyPagesTo(new List<int> { pageNum }, target);
-                pagePaths.Add(outPath);
-            }
-
-            return pagePaths;
-        }
-        private async Task<byte[]> BuildRetriedBytesFromConvertedFileAsync(
-            string sourcePath,
-            string resultFileName,
-            CancellationToken ct)
-        {
-            var tempDir = Path.Combine(Path.GetTempPath(), "ocr-retry", Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(tempDir);
-
-            try
-            {
-                var conversion = await _converter.ConvertAsync(sourcePath, tempDir, ct);
-                if (!conversion.Success)
-                    throw new InvalidOperationException(conversion.Error ?? "Conversion failed during retry.");
-
-                var outputExt = Path.GetExtension(conversion.OutputPath);
-                if (outputExt.Equals(".pdf", StringComparison.OrdinalIgnoreCase))
-                {
-                    var pageNumber = ExtractPageNumber(resultFileName);
-                    if (pageNumber is null)
-                        throw new InvalidOperationException("Could not determine the converted PDF page number for retry.");
-
-                    return ExtractSinglePagePdfBytes(conversion.OutputPath, pageNumber.Value);
-                }
-
-                var pageNumberFromName = ExtractPageNumber(resultFileName);
-                if (pageNumberFromName is not null)
-                {
-                    var baseName = Path.GetFileNameWithoutExtension(sourcePath);
-                    var candidate = Directory.EnumerateFiles(tempDir, $"{baseName}_p{pageNumberFromName}.*")
-                        .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
-                        .FirstOrDefault();
-
-                    if (candidate is not null)
-                        return await File.ReadAllBytesAsync(candidate, ct);
-                }
-
-                return await File.ReadAllBytesAsync(conversion.OutputPath, ct);
-            }
-            finally
-            {
-                try
-                {
-                    if (Directory.Exists(tempDir))
-                        Directory.Delete(tempDir, recursive: true);
-                }
-                catch
-                {
-                }
-            }
-        }
-
         private static int? ExtractPageNumber(string fileName)
         {
             var match = Regex.Match(fileName, @"_p(?<page>\d+)(?:\D|$)", RegexOptions.IgnoreCase);
@@ -709,6 +712,33 @@ namespace OCR_BACKEND.Services
             source.CopyPagesTo(new List<int> { pageNumber }, target);
             target.Close();
 
+            return output.ToArray();
+        }
+
+        private static byte[] ExtractSinglePagePdfBytes(byte[] pdfBytes, int pageNumber)
+        {
+            using var output = new MemoryStream();
+            using var input = new MemoryStream(pdfBytes);
+            using var reader = new iText.Kernel.Pdf.PdfReader(input);
+            using var writer = new iText.Kernel.Pdf.PdfWriter(output);
+            using var source = new iText.Kernel.Pdf.PdfDocument(reader);
+            using var target = new iText.Kernel.Pdf.PdfDocument(writer);
+
+            var totalPages = source.GetNumberOfPages();
+            if (totalPages <= 0)
+                throw new InvalidOperationException("The source PDF has no pages.");
+
+            if (pageNumber < 1 || pageNumber > totalPages)
+            {
+                if (totalPages == 1)
+                    pageNumber = 1;
+                else
+                    throw new InvalidOperationException(
+                        $"Requested page number {pageNumber} is out of bounds for a PDF with {totalPages} page(s).");
+            }
+
+            source.CopyPagesTo(new List<int> { pageNumber }, target);
+            target.Close();
             return output.ToArray();
         }
 

@@ -28,6 +28,11 @@ namespace OCR_BACKEND.Services
             string inputPath,
             string outputDir,
             CancellationToken ct = default);
+
+        Task<ConversionResult> ConvertFromBytesAsync(
+            byte[] inputBytes,
+            string inputExtension,
+            CancellationToken ct = default);
     }
 
     public sealed class FileConversionService : IFileConversionService
@@ -79,6 +84,24 @@ namespace OCR_BACKEND.Services
 
             return new ConversionResult(false, inputPath, "application/octet-stream",
                 $"Extension '{ext}' does not require conversion.");
+        }
+
+        public async Task<ConversionResult> ConvertFromBytesAsync(
+            byte[] inputBytes,
+            string inputExtension,
+            CancellationToken ct = default)
+        {
+            if (inputBytes == null || inputBytes.Length == 0)
+                return new ConversionResult(false, string.Empty, "application/octet-stream", "Input file bytes are empty.");
+
+            var safeExt = inputExtension.StartsWith('.') ? inputExtension : $".{inputExtension}";
+            var tempDir = Path.Combine(Path.GetTempPath(), "ocr-conversion", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDir);
+
+            var inputPath = Path.Combine(tempDir, $"input{safeExt}");
+            await File.WriteAllBytesAsync(inputPath, inputBytes, ct);
+
+            return await ConvertAsync(inputPath, tempDir, ct);
         }
 
         // ── TIFF → JPEG (Magick.NET) ────────────────────────────────────────

@@ -15,6 +15,7 @@ namespace OCR_BACKEND.BackgroundServices
         private readonly OcrJobQueue _ocrJobQueue;
         private readonly OcrJobDBHelper _ocrJobDBHelper;
         private readonly GeminiService _gemini;
+        private readonly IServiceScopeFactory _scopeFactory;
         private readonly OcrJobCancellationRegistry _cancellationRegistry;
         private readonly ILogger<OcrWorkerService> _logger;
         private readonly IConfiguration _config;
@@ -23,6 +24,7 @@ namespace OCR_BACKEND.BackgroundServices
             OcrJobQueue ocrJobQueue,
             OcrJobDBHelper ocrJobDBHelper,
             GeminiService gemini,
+            IServiceScopeFactory scopeFactory,
             OcrJobCancellationRegistry cancellationRegistry,
             ILogger<OcrWorkerService> logger,
             IConfiguration config)
@@ -30,6 +32,7 @@ namespace OCR_BACKEND.BackgroundServices
             _ocrJobQueue = ocrJobQueue;
             _ocrJobDBHelper = ocrJobDBHelper;
             _gemini = gemini;
+            _scopeFactory = scopeFactory;
             _cancellationRegistry = cancellationRegistry;
             _logger = logger;
             _config = config;
@@ -167,7 +170,7 @@ namespace OCR_BACKEND.BackgroundServices
             CancellationToken ct)
         {
             var fileName = Path.GetFileName(workItem.FilePath);
-            var bytes = await File.ReadAllBytesAsync(workItem.FilePath, ct);
+            var bytes = await ReadWorkItemBytesAsync(jobId, workItem.FilePath, ct);
             var contentType = ResolveContentType(workItem.FilePath);
             var attemptResult = await ExecuteGeminiWithRetryAsync(
                 () => _gemini.ExtractTextFromFileBytes(bytes, contentType, geminiModel),
@@ -194,9 +197,7 @@ namespace OCR_BACKEND.BackgroundServices
             string? geminiModel,
             CancellationToken ct)
         {
-            var relativePath = Path.GetRelativePath(
-                storageRoot,
-                Path.GetFullPath(workItem.OriginalSourcePath));
+            var relativePath = NormalizeStoredPath(workItem.OriginalSourcePath);
 
             if (GetWorkItemPageCount(workItem) == 1)
             {
@@ -301,9 +302,7 @@ namespace OCR_BACKEND.BackgroundServices
             string? geminiModel,
             CancellationToken ct)
         {
-            var relativePath = Path.GetRelativePath(
-                storageRoot,
-                Path.GetFullPath(workItem.OriginalSourcePath));
+            var relativePath = NormalizeStoredPath(workItem.OriginalSourcePath);
 
             var results = new List<OcrJobResult>(workItem.Pages.Count);
 
@@ -311,7 +310,7 @@ namespace OCR_BACKEND.BackgroundServices
             {
                 var page = workItem.Pages[index];
                 var pageLabel = $"{Path.GetFileName(workItem.FilePath)} page {page.PageNumber}";
-                var pageBytes = ExtractSinglePagePdfBytes(workItem.FilePath, index + 1);
+                var pageBytes = await ExtractSinglePagePdfBytesFromWorkItemAsync(jobId, workItem.FilePath, index + 1, ct);
                 var pageResult = await ExecuteGeminiWithRetryAsync(
                     () => _gemini.ExtractTextFromFileBytes(pageBytes, "application/pdf", geminiModel),
                     pageLabel,
@@ -349,9 +348,7 @@ namespace OCR_BACKEND.BackgroundServices
             string storageRoot,
             string error)
         {
-            var relativePath = Path.GetRelativePath(
-                storageRoot,
-                Path.GetFullPath(workItem.OriginalSourcePath));
+            var relativePath = NormalizeStoredPath(workItem.OriginalSourcePath);
 
             if (workItem.Pages.Count == 0)
             {
@@ -407,6 +404,77 @@ namespace OCR_BACKEND.BackgroundServices
 
         private static int GetWorkItemPageCount(OcrJobWorkItem item)
             => item.Pages.Count == 0 ? 1 : item.Pages.Count;
+
+        private static string NormalizeStoredPath(string path)
+            => path.Replace("\\", "/");
+
+        private async Task<byte[]> ReadWorkItemBytesAsync(Guid jobId, string filePath, CancellationToken ct)
+        {
+            if (File.Exists(filePath))
+                return await File.ReadAllBytesAsync(filePath, ct);
+
+            var parsed = TryResolveStoragePath(filePath);
+            if (parsed is null)
+                throw new FileNotFoundException($"Unable to resolve work item path '{filePath}' from local or storage.");
+
+            using var scope = _scopeFactory.CreateScope();
+            var storage = scope.ServiceProvider.GetRequiredService<IStorageService>();
+            var storageBytes = await storage.GetFileAsyncBytes(
+                jobId.ToString(),
+                parsed.Value.FileType,
+                parsed.Value.FileName,
+                ct);
+            if (storageBytes == null || storageBytes.Length == 0)
+                throw new FileNotFoundException($"Unable to read work item '{filePath}' from storage.");
+
+            return storageBytes;
+        }
+
+        private static (string FileType, string FileName)? TryResolveStoragePath(string filePath)
+        {
+            var normalized = filePath.Replace("\\", "/");
+            var parts = normalized
+                .Split('/', StringSplitOptions.RemoveEmptyEntries);
+
+            if (parts.Length < 2)
+                return null;
+
+            var originalsIndex = Array.FindIndex(
+                parts,
+                p => p.Equals("originals", StringComparison.OrdinalIgnoreCase));
+            if (originalsIndex >= 0 && originalsIndex < parts.Length - 1)
+                return ("originals", parts[^1]);
+
+            var convertedIndex = Array.FindIndex(
+                parts,
+                p => p.Equals("converted", StringComparison.OrdinalIgnoreCase));
+            if (convertedIndex >= 0 && convertedIndex < parts.Length - 1)
+                return ("converted", parts[^1]);
+
+            if (parts.Length >= 3 &&
+                parts[0].Equals("ocr-jobs", StringComparison.OrdinalIgnoreCase) &&
+                (parts[2].Equals("originals", StringComparison.OrdinalIgnoreCase) ||
+                 parts[2].Equals("converted", StringComparison.OrdinalIgnoreCase)) &&
+                parts.Length >= 4)
+            {
+                return (parts[2], parts[^1]);
+            }
+
+            return (parts[0], parts[^1]);
+        }
+
+        private async Task<byte[]> ExtractSinglePagePdfBytesFromWorkItemAsync(
+            Guid jobId,
+            string filePath,
+            int pageNumber,
+            CancellationToken ct)
+        {
+            if (File.Exists(filePath))
+                return ExtractSinglePagePdfBytes(filePath, pageNumber);
+
+            var pdfBytes = await ReadWorkItemBytesAsync(jobId, filePath, ct);
+            return ExtractSinglePagePdfBytes(pdfBytes, pageNumber);
+        }
 
         private async Task<GeminiAttemptResult> ExecuteGeminiWithRetryAsync(
             Func<Task<string>> operation,
@@ -480,6 +548,21 @@ namespace OCR_BACKEND.BackgroundServices
         {
             using var output = new MemoryStream();
             using var reader = new iText.Kernel.Pdf.PdfReader(pdfPath);
+            using var writer = new iText.Kernel.Pdf.PdfWriter(output);
+            using var source = new iText.Kernel.Pdf.PdfDocument(reader);
+            using var target = new iText.Kernel.Pdf.PdfDocument(writer);
+
+            source.CopyPagesTo(new List<int> { pageNumber }, target);
+            target.Close();
+
+            return output.ToArray();
+        }
+
+        private static byte[] ExtractSinglePagePdfBytes(byte[] pdfBytes, int pageNumber)
+        {
+            using var output = new MemoryStream();
+            using var input = new MemoryStream(pdfBytes);
+            using var reader = new iText.Kernel.Pdf.PdfReader(input);
             using var writer = new iText.Kernel.Pdf.PdfWriter(output);
             using var source = new iText.Kernel.Pdf.PdfDocument(reader);
             using var target = new iText.Kernel.Pdf.PdfDocument(writer);

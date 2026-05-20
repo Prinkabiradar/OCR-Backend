@@ -16,6 +16,10 @@ namespace OCR_BACKEND.Services
 
     public interface IPdfToImageService
     {
+        Task<List<PdfPageResult>> ExtractPagesFromBytesAsync(
+            byte[] pdfBytes,
+            string fileName,
+            CancellationToken ct = default);
 
         Task<List<PdfPageResult>> ExtractPagesAsync(
             string pdfPath,
@@ -35,6 +39,40 @@ namespace OCR_BACKEND.Services
         {
             _config = config;
             _logger = logger;
+        }
+
+        public async Task<List<PdfPageResult>> ExtractPagesFromBytesAsync(
+            byte[] pdfBytes,
+            string fileName,
+            CancellationToken ct = default)
+        {
+            if (pdfBytes == null || pdfBytes.Length == 0)
+                return new List<PdfPageResult>();
+
+            var tempDir = Path.Combine(Path.GetTempPath(), "ocr-pdf", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDir);
+
+            var safeFileName = string.IsNullOrWhiteSpace(fileName)
+                ? $"input_{Guid.NewGuid():N}.pdf"
+                : Path.GetFileName(fileName);
+            var inputPath = Path.Combine(tempDir, safeFileName);
+
+            try
+            {
+                await File.WriteAllBytesAsync(inputPath, pdfBytes, ct);
+                return await ExtractPagesAsync(inputPath, tempDir, ct);
+            }
+            finally
+            {
+                try
+                {
+                    if (Directory.Exists(tempDir))
+                        Directory.Delete(tempDir, recursive: true);
+                }
+                catch
+                {
+                }
+            }
         }
 
         public async Task<List<PdfPageResult>> ExtractPagesAsync(

@@ -15,11 +15,19 @@ namespace OCR_BACKEND.Controllers
     {
         private readonly IDocumentPageService _service;
         private readonly IConfiguration _config;
+        private readonly IStorageService _storage;
+        private readonly ILogger<DocumentPageController> _logger;
 
-        public DocumentPageController(IDocumentPageService service, IConfiguration config)
+        public DocumentPageController(
+            IDocumentPageService service,
+            IConfiguration config,
+            IStorageService storage,
+            ILogger<DocumentPageController> logger)
         {
             _service = service;
             _config = config;
+            _storage = storage;
+            _logger = logger;
         }
 
         [HttpPost("InsertUpdateDocumentPage")]
@@ -132,10 +140,65 @@ namespace OCR_BACKEND.Controllers
         }
 
         [HttpGet("GetDocumentFile")]
-        public async Task<IActionResult> GetDocumentFile([FromQuery] int documentId, [FromQuery] int pageNumber = 1)
+        public async Task<IActionResult> GetDocumentFile(
+            [FromQuery] int documentId,
+            [FromQuery] int pageNumber = 1,
+            [FromQuery] string? filePath = null,
+            [FromQuery] string? requestJobId = null)
         {
             try
             {
+                _logger.LogInformation(
+                    "GetDocumentFile request: documentId={DocumentId}, pageNumber={PageNumber}, requestJobId={RequestJobId}, filePath={FilePath}, storageType={StorageType}",
+                    documentId, pageNumber, requestJobId, filePath, _storage.GetStorageType());
+
+                // ── 0. Fast path: if caller provides exact file path, use it directly ──
+                if (!string.IsNullOrWhiteSpace(filePath))
+                {
+                    var normalizedPath = filePath.Replace("\\", "/");
+                    var pathParts = normalizedPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+
+                    var directFileName = Path.GetFileName(normalizedPath);
+                    var directFileType = normalizedPath.Contains("/originals/", StringComparison.OrdinalIgnoreCase)
+                        ? "originals"
+                        : normalizedPath.Contains("/converted/", StringComparison.OrdinalIgnoreCase)
+                            ? "converted"
+                            : (pathParts.Length >= 2 ? pathParts[0] : null);
+
+                    var resolvedJobId = requestJobId;
+                    if (string.IsNullOrWhiteSpace(resolvedJobId))
+                    {
+                        // Supports S3 key format: ocr-jobs/{jobId}/{type}/{file}
+                        var ocrJobsIndex = Array.FindIndex(pathParts, p => p.Equals("ocr-jobs", StringComparison.OrdinalIgnoreCase));
+                        if (ocrJobsIndex >= 0 && pathParts.Length > ocrJobsIndex + 1)
+                            resolvedJobId = pathParts[ocrJobsIndex + 1];
+                        else if (pathParts.Length >= 3)
+                            // Supports local-relative format: {jobId}/{type}/{file}
+                            resolvedJobId = pathParts[0];
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(resolvedJobId) &&
+                        !string.IsNullOrWhiteSpace(directFileType) &&
+                        !string.IsNullOrWhiteSpace(directFileName))
+                    {
+                        _logger.LogInformation(
+                            "GetDocumentFile direct lookup: jobId={JobId}, fileType={FileType}, fileName={FileName}",
+                            resolvedJobId, directFileType, directFileName);
+                        var directBytes = await _storage.GetFileAsyncBytes(resolvedJobId, directFileType, directFileName);
+                        if (directBytes != null && directBytes.Length > 0)
+                        {
+                            _logger.LogInformation(
+                                "GetDocumentFile direct lookup success: bytes={ByteCount}",
+                                directBytes.Length);
+                            return File(directBytes, GetContentType(directFileName));
+                        }
+
+                        _logger.LogWarning(
+                            "GetDocumentFile direct lookup returned empty: jobId={JobId}, fileType={FileType}, fileName={FileName}",
+                            resolvedJobId, directFileType, directFileName);
+                    }
+                }
+
                 // ── 1. Get job_id from DB ─────────────────────────────────────────
                 var request = new OcrDocumentRequest
                 {
@@ -154,72 +217,110 @@ namespace OCR_BACKEND.Controllers
 
                 var row = dt.Rows[0];
                 var jobId = row["job_id"]?.ToString();
+                var dbFilePath = row["filepath"]?.ToString() ?? row["FilePath"]?.ToString();
+                _logger.LogInformation(
+                    "GetDocumentFile DB row: jobId={JobId}, dbFilePath={DbFilePath}",
+                    jobId, dbFilePath);
 
                 if (string.IsNullOrWhiteSpace(jobId))
                     return NotFound(new { message = "Job ID not found for this document." });
 
-                var storageRoot = _config["FileStorage:Root"] ?? "uploads";
-                var originalsDir = Path.Combine(storageRoot, jobId, "originals");
-                var convertedDir = Path.Combine(storageRoot, jobId, "converted");
+                string? fileType = null;
+                string? fileName = null;
 
-                // ── 2. Find file matching page number in originals ────────────────
-                string? filePath = null;
-
-                if (Directory.Exists(originalsDir))
+                if (!string.IsNullOrWhiteSpace(dbFilePath))
                 {
-                    var allOriginals = Directory.GetFiles(originalsDir)
-                        .OrderBy(f => Path.GetFileName(f))
-                        .ToList();
+                    var normalizedPath = dbFilePath.Replace("\\", "/");
+                    fileName = Path.GetFileName(normalizedPath);
 
-                    // If only one file uploaded (e.g. a PDF or single image), always return it
-                    if (allOriginals.Count == 1)
+                    // Supports both:
+                    // 1) originals/file.pdf
+                    // 2) ocr-jobs/{jobId}/originals/file.pdf (DigitalOcean key)
+                    if (normalizedPath.Contains("/originals/", StringComparison.OrdinalIgnoreCase))
                     {
-                        filePath = allOriginals[0];
+                        fileType = "originals";
+                    }
+                    else if (normalizedPath.Contains("/converted/", StringComparison.OrdinalIgnoreCase))
+                    {
+                        fileType = "converted";
                     }
                     else
                     {
-                        // Match by page number pattern e.g. _p1, _p2 or by index
-                        filePath = allOriginals
-                            .FirstOrDefault(f => Regex.IsMatch(
-                                Path.GetFileNameWithoutExtension(f),
-                                $@"_p{pageNumber}$", RegexOptions.IgnoreCase))
-                            ?? allOriginals.ElementAtOrDefault(pageNumber - 1);
+                        var parts = normalizedPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+                        if (parts.Length >= 2)
+                            fileType = parts[0];
                     }
                 }
 
-                // ── 3. Fallback to converted folder ───────────────────────────────
-                if (filePath == null && Directory.Exists(convertedDir))
+                if (string.IsNullOrWhiteSpace(fileType) || string.IsNullOrWhiteSpace(fileName))
                 {
-                    var allConverted = Directory.GetFiles(convertedDir)
-                        .OrderBy(f => Path.GetFileName(f))
-                        .ToList();
-
-                    if (allConverted.Count == 1)
+                    var originals = await _storage.ListFilesAsync(jobId, "originals");
+                    _logger.LogInformation(
+                        "GetDocumentFile originals list count: {Count} for jobId={JobId}",
+                        originals.Count, jobId);
+                    if (originals.Count > 0)
                     {
-                        filePath = allConverted[0];
-                    }
-                    else
-                    {
-                        filePath = allConverted
+                        fileType = "originals";
+                        fileName = originals
                             .FirstOrDefault(f => Regex.IsMatch(
                                 Path.GetFileNameWithoutExtension(f),
                                 $@"_p{pageNumber}$", RegexOptions.IgnoreCase))
-                            ?? allConverted.ElementAtOrDefault(pageNumber - 1);
+                            ?? originals.ElementAtOrDefault(pageNumber - 1)
+                            ?? originals.FirstOrDefault();
                     }
                 }
 
-                if (filePath == null || !System.IO.File.Exists(filePath))
+                if ((string.IsNullOrWhiteSpace(fileType) || string.IsNullOrWhiteSpace(fileName)))
+                {
+                    var converted = await _storage.ListFilesAsync(jobId, "converted");
+                    _logger.LogInformation(
+                        "GetDocumentFile converted list count: {Count} for jobId={JobId}",
+                        converted.Count, jobId);
+                    if (converted.Count > 0)
+                    {
+                        fileType = "converted";
+                        fileName = converted
+                            .FirstOrDefault(f => Regex.IsMatch(
+                                Path.GetFileNameWithoutExtension(f),
+                                $@"_p{pageNumber}$", RegexOptions.IgnoreCase))
+                            ?? converted.ElementAtOrDefault(pageNumber - 1)
+                            ?? converted.FirstOrDefault();
+                    }
+                }
+
+                if (string.IsNullOrWhiteSpace(fileType) || string.IsNullOrWhiteSpace(fileName))
+                {
+                    _logger.LogWarning(
+                        "GetDocumentFile file resolution failed: documentId={DocumentId}, pageNumber={PageNumber}, jobId={JobId}",
+                        documentId, pageNumber, jobId);
                     return NotFound(new { message = "No file found for this document." });
+                }
 
-                // ── 4. Return as file stream (blob) ───────────────────────────────
-                var contentType = GetContentType(filePath);
-                var bytes = await System.IO.File.ReadAllBytesAsync(filePath);
+                _logger.LogInformation(
+                    "GetDocumentFile final lookup: jobId={JobId}, fileType={FileType}, fileName={FileName}",
+                    jobId, fileType, fileName);
+                var bytes = await _storage.GetFileAsyncBytes(jobId, fileType, fileName);
+                if (bytes == null || bytes.Length == 0)
+                {
+                    _logger.LogWarning(
+                        "GetDocumentFile storage bytes empty: jobId={JobId}, fileType={FileType}, fileName={FileName}",
+                        jobId, fileType, fileName);
+                    return NotFound(new { message = "No file found for this document in storage." });
+                }
+
+                var contentType = GetContentType(fileName);
+                _logger.LogInformation(
+                    "GetDocumentFile success: jobId={JobId}, fileName={FileName}, contentType={ContentType}, bytes={ByteCount}",
+                    jobId, fileName, contentType, bytes.Length);
                 return File(bytes, contentType);
-    }
+            }
             catch (Exception ex)
             {
+                _logger.LogError(ex,
+                    "GetDocumentFile exception: documentId={DocumentId}, pageNumber={PageNumber}, requestJobId={RequestJobId}, filePath={FilePath}",
+                    documentId, pageNumber, requestJobId, filePath);
                 return BadRequest(new { message = ex.Message });
-}
+            }
         }
 
         private string GetContentType(string path)

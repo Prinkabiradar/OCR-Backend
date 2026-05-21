@@ -1,6 +1,7 @@
 using Amazon.S3;
 using Amazon.S3.Model;
 using System;
+using System.IO.Compression;
 using System.Text.RegularExpressions;
 
 namespace OCR_BACKEND.Services
@@ -11,6 +12,8 @@ namespace OCR_BACKEND.Services
     /// </summary>
     public class DigitalOceanStorageService : IStorageService
     {
+        private const string CompressionFlagMetadataKey = "x-amz-meta-content-compressed";
+        private const string OriginalSizeMetadataKey = "x-amz-meta-original-size";
         private readonly IAmazonS3 _s3Client;
         private readonly string _bucketName;
         private readonly string _spaceName;
@@ -58,15 +61,21 @@ namespace OCR_BACKEND.Services
             try
             {
                 var key = BuildS3Key(jobId, fileType, fileName);
+                await using var preparedStream = await PrepareLosslessCompressedStreamAsync(fileStream, ct);
 
                 var uploadRequest = new PutObjectRequest
                 {
                     BucketName = _bucketName,
                     Key = key,
-                    InputStream = fileStream,
+                    InputStream = preparedStream.Stream,
                     ContentType = GetContentType(fileName),
                     StorageClass = S3StorageClass.Standard
                 };
+                
+                foreach (var kvp in preparedStream.Metadata)
+                {
+                    uploadRequest.Metadata.Add(kvp.Key, kvp.Value);
+                }
 
                 // Set public-read ACL for files that need to be accessed by users
                 uploadRequest.CannedACL = S3CannedACL.PublicRead;
@@ -101,6 +110,19 @@ namespace OCR_BACKEND.Services
                 var memoryStream = new MemoryStream();
                 await response.ResponseStream.CopyToAsync(memoryStream, ct);
                 memoryStream.Position = 0;
+
+                if (IsCompressedObject(response.Metadata))
+                {
+                    var decompressed = new MemoryStream();
+                    using (var gzip = new GZipStream(memoryStream, CompressionMode.Decompress, leaveOpen: true))
+                    {
+                        await gzip.CopyToAsync(decompressed, ct);
+                    }
+
+                    decompressed.Position = 0;
+                    memoryStream.Dispose();
+                    return decompressed;
+                }
 
                 return memoryStream;
             }
@@ -335,6 +357,66 @@ namespace OCR_BACKEND.Services
                 ".pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
                 _ => "application/octet-stream"
             };
+        }
+
+        private static bool IsCompressedObject(MetadataCollection metadata)
+        {
+            var value = metadata[CompressionFlagMetadataKey];
+            return string.Equals(value, "gzip", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static async Task<PreparedUploadStream> PrepareLosslessCompressedStreamAsync(Stream sourceStream, CancellationToken ct)
+        {
+            var sourceBytes = await ReadAllBytesAsync(sourceStream, ct);
+            var compressedBytes = await CompressGzipAsync(sourceBytes, ct);
+
+            // Keep original bytes when compression does not help.
+            if (compressedBytes.Length >= sourceBytes.Length)
+            {
+                return new PreparedUploadStream(new MemoryStream(sourceBytes), new Dictionary<string, string>());
+            }
+
+            var metadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                [CompressionFlagMetadataKey] = "gzip",
+                [OriginalSizeMetadataKey] = sourceBytes.Length.ToString()
+            };
+
+            return new PreparedUploadStream(new MemoryStream(compressedBytes), metadata);
+        }
+
+        private static async Task<byte[]> CompressGzipAsync(byte[] sourceBytes, CancellationToken ct)
+        {
+            await using var output = new MemoryStream();
+            await using (var gzip = new GZipStream(output, CompressionLevel.SmallestSize, leaveOpen: true))
+            {
+                await gzip.WriteAsync(sourceBytes, ct);
+            }
+
+            return output.ToArray();
+        }
+
+        private static async Task<byte[]> ReadAllBytesAsync(Stream stream, CancellationToken ct)
+        {
+            if (stream.CanSeek)
+            {
+                stream.Position = 0;
+            }
+
+            await using var ms = new MemoryStream();
+            await stream.CopyToAsync(ms, ct);
+            return ms.ToArray();
+        }
+
+        private sealed record PreparedUploadStream(
+            MemoryStream Stream,
+            Dictionary<string, string> Metadata) : IAsyncDisposable
+        {
+            public ValueTask DisposeAsync()
+            {
+                Stream.Dispose();
+                return ValueTask.CompletedTask;
+            }
         }
     }
 }

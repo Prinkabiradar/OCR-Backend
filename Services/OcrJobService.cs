@@ -622,7 +622,8 @@ namespace OCR_BACKEND.Services
                 .OrderBy(p => p)
                 .ToList();
 
-            var missingPages = expected > 0
+            var canVerifyByPageNumbers = numberedPages.Count > 0;
+            var missingPages = expected > 0 && canVerifyByPageNumbers
                 ? Enumerable.Range(1, expected).Where(p => !groupedByPage.ContainsKey(p)).ToList()
                 : new List<int>();
 
@@ -705,7 +706,7 @@ namespace OCR_BACKEND.Services
             result.CanFinalize = result.IsPageOrderValid &&
                                  !result.HasMissingPages &&
                                  !result.HasDuplicatePages &&
-                                 numberedPages.Count > 0;
+                                 (!canVerifyByPageNumbers || numberedPages.Count > 0);
 
             return result;
         }

@@ -22,7 +22,7 @@ public class UtilityController : ControllerBase
         if (string.IsNullOrEmpty(searchTerm))
             searchTerm = "";
 
-        int pageSize = 50;
+        int pageSize = 5000;
 
         var result = await _service.AllDropdown(searchTerm, page, pageSize, type, parentId);
 

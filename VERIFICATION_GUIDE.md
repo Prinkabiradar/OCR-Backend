@@ -1,3 +1,5 @@
+dotnet run --launch-profile https
+
 # ✅ Verification Guide - Digital Ocean Spaces Integration
 
 ## Quick Verification (2 Minutes)

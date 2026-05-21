@@ -128,28 +128,64 @@ namespace OCR_BACKEND.Services
                         continue;
                     }
 
-                    var pagePaths = await SplitPdfIntoPagesAsync(pdfBytes, fileName, dbJobId, ct);
-
-                    // Delete the original whole PDF from storage — pages are now stored individually
-                    await _storage.DeleteFileAsync(
-                        dbJobId.ToString(),
-                        "originals",
-                        fileName,
-                        ct);
-
-                    // Process each single-page PDF
-                    foreach (var pagePath in pagePaths)
+                    try
                     {
-                        var pageFileName = Path.GetFileName(pagePath);
+                        var pagePaths = await SplitPdfIntoPagesAsync(pdfBytes, fileName, dbJobId, ct);
 
-                        // Always send to Gemini OCR regardless of text/scanned
-                        ocrWorkItems.Add(new OcrJobWorkItem(
-                            pagePath,
-                            pagePath,
-                            new List<OcrJobPageReference>
-                            {
-                                new(1, pageFileName)
-                            }));
+                        // Delete the original whole PDF from storage — pages are now stored individually
+                        await _storage.DeleteFileAsync(
+                            dbJobId.ToString(),
+                            "originals",
+                            fileName,
+                            ct);
+
+                        // Process each single-page PDF
+                        foreach (var pagePath in pagePaths)
+                        {
+                            var pageFileName = Path.GetFileName(pagePath);
+
+                            // Always send to Gemini OCR regardless of text/scanned
+                            ocrWorkItems.Add(new OcrJobWorkItem(
+                                pagePath,
+                                pagePath,
+                                new List<OcrJobPageReference>
+                                {
+                                    new(1, pageFileName)
+                                }));
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        var sniffedExt = TryDetectImageExtensionFromBytes(pdfBytes);
+                        if (!string.IsNullOrWhiteSpace(sniffedExt))
+                        {
+                            var correctedName = $"{Path.GetFileNameWithoutExtension(fileName)}_sniffed{sniffedExt}";
+                            await using var fallbackStream = new MemoryStream(pdfBytes);
+                            var correctedPath = await _storage.SaveFileAsync(
+                                dbJobId.ToString(),
+                                "converted",
+                                correctedName,
+                                fallbackStream,
+                                ct);
+
+                            _logger.LogWarning(
+                                ex,
+                                "Failed to parse PDF {File}. Routed as image using detected type {Ext}.",
+                                fileName,
+                                sniffedExt);
+
+                            ocrWorkItems.Add(new OcrJobWorkItem(
+                                correctedPath,
+                                storagePath,
+                                new List<OcrJobPageReference>
+                                {
+                                    new(1, Path.GetFileName(correctedPath))
+                                }));
+                        }
+                        else
+                        {
+                            _logger.LogWarning(ex, "Skipping invalid PDF {File}.", fileName);
+                        }
                     }
                     continue;
                 }
@@ -448,6 +484,55 @@ namespace OCR_BACKEND.Services
 
         private static int GetWorkItemPageCount(OcrJobWorkItem item)
             => item.Pages.Count == 0 ? 1 : item.Pages.Count;
+
+        private static string? TryDetectImageExtensionFromBytes(byte[] bytes)
+        {
+            if (bytes == null || bytes.Length < 4)
+                return null;
+
+            // JPEG
+            if (bytes.Length >= 3 &&
+                bytes[0] == 0xFF &&
+                bytes[1] == 0xD8 &&
+                bytes[2] == 0xFF)
+                return ".jpg";
+
+            // PNG
+            if (bytes.Length >= 8 &&
+                bytes[0] == 0x89 &&
+                bytes[1] == 0x50 &&
+                bytes[2] == 0x4E &&
+                bytes[3] == 0x47 &&
+                bytes[4] == 0x0D &&
+                bytes[5] == 0x0A &&
+                bytes[6] == 0x1A &&
+                bytes[7] == 0x0A)
+                return ".png";
+
+            // GIF87a / GIF89a
+            if (bytes.Length >= 6 &&
+                bytes[0] == 0x47 &&
+                bytes[1] == 0x49 &&
+                bytes[2] == 0x46 &&
+                bytes[3] == 0x38 &&
+                (bytes[4] == 0x37 || bytes[4] == 0x39) &&
+                bytes[5] == 0x61)
+                return ".gif";
+
+            // WebP (RIFF....WEBP)
+            if (bytes.Length >= 12 &&
+                bytes[0] == 0x52 &&
+                bytes[1] == 0x49 &&
+                bytes[2] == 0x46 &&
+                bytes[3] == 0x46 &&
+                bytes[8] == 0x57 &&
+                bytes[9] == 0x45 &&
+                bytes[10] == 0x42 &&
+                bytes[11] == 0x50)
+                return ".webp";
+
+            return null;
+        }
 
         public Task<DataTable> GetOcrJobs(OcrJobFetchRequest model) => _ocrJobDBHelper.GetOcrJobs(model);
         public Task<DataTable> GetOcrJobById(Guid jobId) => _ocrJobDBHelper.GetOcrJobById(jobId);

@@ -112,11 +112,10 @@ namespace OCR_BACKEND.Services
             var responseBody = await response.Content.ReadAsStringAsync();
             if (!response.IsSuccessStatusCode)
             {
-                if (responseBody.Contains("API key not valid", StringComparison.OrdinalIgnoreCase) ||
-                    responseBody.Contains("API Key not found", StringComparison.OrdinalIgnoreCase))
+                if (HasApiKeyAuthError(responseBody))
                 {
                     throw new InvalidOperationException(
-                        "Gemini API key is invalid or missing. Set a valid key in Gemini:ApiKey or GEMINI_API_KEY.");
+                        "Gemini API key is invalid, expired, or missing. Set a valid key in Gemini:ApiKey or GEMINI_API_KEY.");
                 }
 
                 throw new InvalidOperationException(
@@ -160,6 +159,9 @@ namespace OCR_BACKEND.Services
 
                 if (!response.IsSuccessStatusCode)
                 {
+                    if (HasApiKeyAuthError(responseBody))
+                        return (false, "Gemini API key is invalid, expired, or missing. Set a valid key in Gemini:ApiKey or GEMINI_API_KEY.");
+
                     if ((int)response.StatusCode == 503)
                         return (false, "Gemini API is temporarily unavailable (503 Service Unavailable). Please try again later.");
                     
@@ -200,6 +202,17 @@ namespace OCR_BACKEND.Services
                     "Gemini API key is not configured. Set Gemini:ApiKey in appsettings or GEMINI_API_KEY.");
 
             return apiKey.Trim();
+        }
+
+        private static bool HasApiKeyAuthError(string responseBody)
+        {
+            if (string.IsNullOrWhiteSpace(responseBody))
+                return false;
+
+            return responseBody.Contains("API key not valid", StringComparison.OrdinalIgnoreCase) ||
+                   responseBody.Contains("API Key not found", StringComparison.OrdinalIgnoreCase) ||
+                   responseBody.Contains("API key expired", StringComparison.OrdinalIgnoreCase) ||
+                   responseBody.Contains("API_KEY_INVALID", StringComparison.OrdinalIgnoreCase);
         }
 
         // ── Keep old name as a thin wrapper so nothing else breaks ──────────

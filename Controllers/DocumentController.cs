@@ -48,14 +48,22 @@ namespace OCR_BACKEND.Controllers
             try
             {
                 DataTable response = await _service.GetDocuments(pagination);
-
                 var lst = response.AsEnumerable()
                     .Select(r => r.Table.Columns.Cast<DataColumn>()
                         .Select(c => new KeyValuePair<string, object>(c.ColumnName, r[c.Ordinal]))
                         .ToDictionary(z => z.Key, z => z.Value)
                     ).ToList();
 
-                return Ok(lst);
+                // Extract TotalCount from the first row (it's a window function result)
+                long totalCount = lst.Count > 0 && lst[0].ContainsKey("TotalCount")
+                    ? Convert.ToInt64(lst[0]["TotalCount"])
+                    : 0;
+
+                return Ok(new
+                {
+                    items = lst,
+                    totalCount = totalCount
+                });
             }
             catch (Exception ex)
             {

@@ -8,20 +8,31 @@ namespace OCR_BACKEND.Controllers
 {
     public static class DocumentPdfGenerator
     {
+        private const float MaxIndentPoints = 72f; // cap at ~1 inch
+        private const int MaxFirstLineIndentSpaces = 20;
+
         public static byte[] Generate(DataTable pages, int documentId, string documentName)
         {
             QuestPDF.Settings.License = LicenseType.Community;
 
             var orderedRows = pages.AsEnumerable()
-                .OrderBy(r => Convert.ToInt32(r["PageNumber"]))
+                .Where(r => TryGetPageNumber(r, out _))
+                .OrderBy(r => GetPageNumberOrDefault(r))
                 .ToList();
+
+            if (orderedRows.Count == 0)
+            {
+                throw new InvalidOperationException(
+                    $"No valid page rows found for DocumentId {documentId}. PageNumber is missing or invalid."
+                );
+            }
 
             var pdf = QuestPDF.Fluent.Document.Create(container =>
             {
                 for (int i = 0; i < orderedRows.Count; i++)
                 {
                     var row = orderedRows[i];
-                    int pageNumber = Convert.ToInt32(row["PageNumber"]);
+                    int pageNumber = GetPageNumberOrDefault(row);
                     string html = row["ExtractedText"]?.ToString() ?? string.Empty;
                     bool isFirstOcrPage = i == 0;
 
@@ -81,6 +92,24 @@ namespace OCR_BACKEND.Controllers
             });
 
             return pdf.GeneratePdf();
+        }
+
+        private static bool TryGetPageNumber(DataRow row, out int pageNumber)
+        {
+            pageNumber = 0;
+            if (row == null || !row.Table.Columns.Contains("PageNumber"))
+                return false;
+
+            var raw = row["PageNumber"];
+            if (raw == null || raw == DBNull.Value)
+                return false;
+
+            return int.TryParse(raw.ToString(), out pageNumber);
+        }
+
+        private static int GetPageNumberOrDefault(DataRow row)
+        {
+            return TryGetPageNumber(row, out var pageNumber) ? pageNumber : int.MaxValue;
         }
 
         // ── HTML → QuestPDF renderer ──────────────────────────────────────────
@@ -172,7 +201,7 @@ namespace OCR_BACKEND.Controllers
                     // survives HTML/PDF whitespace normalization.
                     if (indentMode == "first-line" && indent > 0)
                     {
-                        int spaceCount = Math.Max(1, (int)Math.Round(indent / 2.5f));
+                        int spaceCount = Math.Max(1, Math.Min(MaxFirstLineIndentSpaces, (int)Math.Round(indent / 2.5f)));
                         t.Span(new string('\u00A0', spaceCount));
                     }
                     
@@ -244,11 +273,21 @@ namespace OCR_BACKEND.Controllers
             var rows = tableNode.SelectNodes(".//tr");
             if (rows == null) return;
 
+            int colCount = rows.Max(r =>
+                r.ChildNodes.Count(n => n.Name == "td" || n.Name == "th"));
+
+            // Malformed table, fallback to plain text content
+            if (colCount <= 0)
+            {
+                var text = System.Net.WebUtility.HtmlDecode(tableNode.InnerText ?? string.Empty);
+                text = NormalizeText(text);
+                if (!string.IsNullOrWhiteSpace(text))
+                    col.Item().PaddingBottom(6).Text(t => t.Span(text).FontSize(10));
+                return;
+            }
+
             col.Item().PaddingBottom(8).Table(table =>
             {
-                int colCount = rows.Max(r =>
-                    r.ChildNodes.Count(n => n.Name == "td" || n.Name == "th"));
-
                 table.ColumnsDefinition(cols =>
                 {
                     for (int i = 0; i < colCount; i++)
@@ -288,7 +327,7 @@ namespace OCR_BACKEND.Controllers
             {
                 if (node.NodeType == HtmlNodeType.Text)
                 {
-                    var text = System.Net.WebUtility.HtmlDecode(node.InnerText);
+                    var text = NormalizeText(System.Net.WebUtility.HtmlDecode(node.InnerText));
                     if (string.IsNullOrEmpty(text)) continue;
 
                     var span = t.Span(text).FontSize(10);
@@ -328,7 +367,7 @@ namespace OCR_BACKEND.Controllers
             {
                 if (node.NodeType == HtmlNodeType.Text)
                 {
-                    var text = System.Net.WebUtility.HtmlDecode(node.InnerText);
+                    var text = NormalizeText(System.Net.WebUtility.HtmlDecode(node.InnerText));
                     if (string.IsNullOrEmpty(text)) continue;
 
                     var span = t.Span(text).FontSize(fontSize);
@@ -373,7 +412,7 @@ namespace OCR_BACKEND.Controllers
             if (!string.IsNullOrWhiteSpace(indentAttr) && int.TryParse(indentAttr, out var indentLevel))
             {
                 var indentValue = indentLevel * 18f;
-                return (indentValue, dataIndentMode);
+                return (Math.Min(MaxIndentPoints, Math.Max(0, indentValue)), dataIndentMode);
             }
             
             // Check for data-indent="X" attribute from frontend  
@@ -381,7 +420,7 @@ namespace OCR_BACKEND.Controllers
             if (!string.IsNullOrWhiteSpace(dataIndentAttr) && int.TryParse(dataIndentAttr, out var dataIndentLevel))
             {
                 var indentValue = dataIndentLevel * 18f;
-                return (indentValue, dataIndentMode);
+                return (Math.Min(MaxIndentPoints, Math.Max(0, indentValue)), dataIndentMode);
             }
             
             // First check for explicit data-indent-mode attribute
@@ -391,7 +430,7 @@ namespace OCR_BACKEND.Controllers
                 var indentValue = ExtractIndentValue(style);
                 if (indentValue > 0)
                 {
-                    return (indentValue, dataIndentMode);
+                    return (Math.Min(MaxIndentPoints, Math.Max(0, indentValue)), dataIndentMode);
                 }
             }
             
@@ -411,7 +450,7 @@ namespace OCR_BACKEND.Controllers
                     "px" => textIndentValue * 0.75f,
                     _ => textIndentValue * 0.75f
                 };
-                return (Math.Max(0, indent), "first-line");
+                return (Math.Min(MaxIndentPoints, Math.Max(0, indent)), "first-line");
             }
             
             // Check for margin-left in style (full paragraph indentation)
@@ -431,7 +470,7 @@ namespace OCR_BACKEND.Controllers
                     "px" => marginValue * 0.75f,
                     _ => marginValue * 0.75f
                 };
-                return (Math.Max(0, indent), "full");
+                return (Math.Min(MaxIndentPoints, Math.Max(0, indent)), "full");
             }
 
             // Check for indent classes (Quill-style)
@@ -443,7 +482,7 @@ namespace OCR_BACKEND.Controllers
 
             if (classMatch.Success &&
                 int.TryParse(classMatch.Groups["level"].Value, out var level))
-                return (Math.Max(0, level) * 18f, "full");
+                return (Math.Min(MaxIndentPoints, Math.Max(0, level) * 18f), "full");
 
             return (0f, "full");
         }
@@ -531,6 +570,23 @@ namespace OCR_BACKEND.Controllers
         {
             var (indent, _) = GetIndentInfo(node);
             return indent;
+        }
+
+        private static string NormalizeText(string? text)
+        {
+            if (string.IsNullOrEmpty(text)) return string.Empty;
+
+            // Convert NBSP/tabs/newlines into normal spacing for safer line-wrap in PDF layout.
+            var normalized = text
+                .Replace('\u00A0', ' ')
+                .Replace('\t', ' ')
+                .Replace('\r', ' ')
+                .Replace('\n', ' ');
+
+            while (normalized.Contains("  "))
+                normalized = normalized.Replace("  ", " ");
+
+            return normalized.Trim();
         }
 
         private static (string? color, float? fontSize) GetInlineStyle(HtmlNode node)

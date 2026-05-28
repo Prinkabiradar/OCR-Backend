@@ -28,11 +28,26 @@ namespace OCR_BACKEND.Controllers
             return string.IsNullOrWhiteSpace(safe) ? fallback : safe;
         }
 
+        private static void NormalizePdfRequest(OcrDocumentRequest request)
+        {
+            // Keep behavior aligned with DocumentPageController.GetDocumentPages,
+            // which currently hardcodes RoleId=3 for fetching document pages.
+            request.RoleId = 3;
+
+            if (request.StartIndex <= 0)
+                request.StartIndex = 1;
+
+            if (request.PageSize <= 0)
+                request.PageSize = 1000;
+        }
+
         [HttpGet("GeneratePdf")]
         public async Task<IActionResult> GeneratePdfByDocumentId([FromQuery] OcrDocumentRequest request)
         {
             try
             {
+                NormalizePdfRequest(request);
+
                 //var userClaims = HttpContext.User;
                 //var idClaim = userClaims.FindFirst(ClaimTypes.NameIdentifier)?.Value;
                 //var roleClaim = userClaims.FindFirst(ClaimTypes.Role)?.Value;
@@ -56,8 +71,18 @@ namespace OCR_BACKEND.Controllers
                 if (string.IsNullOrWhiteSpace(documentName))
                     documentName = $"Document_{request.DocumentId}";
 
-                byte[] pdfBytes = DocumentPdfGenerator.Generate(
-                                      response, request.DocumentId, documentName);
+                byte[] pdfBytes;
+                try
+                {
+                    pdfBytes = DocumentPdfGenerator.Generate(
+                        response, request.DocumentId, documentName);
+                }
+                catch
+                {
+                    // Fallback for complex/invalid HTML that can break rich layout constraints.
+                    pdfBytes = OCR_BACKEND.Services.DocumentPdfGenerator.Generate(
+                        response, request.DocumentId);
+                }
 
                 string baseFileName = documentName?.Trim() ?? "";
 
@@ -86,7 +111,11 @@ namespace OCR_BACKEND.Controllers
             }
             catch (Exception ex)
             {
-                return BadRequest(new { message = ex.Message });
+                return BadRequest(new
+                {
+                    message = ex.Message,
+                    detail = ex.InnerException?.Message
+                });
             }
         }
 
@@ -154,7 +183,11 @@ namespace OCR_BACKEND.Controllers
             }
             catch (Exception ex)
             {
-                return BadRequest(new { message = ex.Message });
+                return BadRequest(new
+                {
+                    message = ex.Message,
+                    detail = ex.InnerException?.Message
+                });
             }
         }
 
@@ -163,6 +196,8 @@ namespace OCR_BACKEND.Controllers
         {
             try
             {
+                NormalizePdfRequest(request);
+
                 //var userClaims = HttpContext.User;
                 //var idClaim = userClaims.FindFirst(ClaimTypes.NameIdentifier)?.Value;
                 //var roleClaim = userClaims.FindFirst(ClaimTypes.Role)?.Value;
@@ -210,7 +245,11 @@ namespace OCR_BACKEND.Controllers
             }
             catch (Exception ex)
             {
-                return BadRequest(new { message = ex.Message });
+                return BadRequest(new
+                {
+                    message = ex.Message,
+                    detail = ex.InnerException?.Message
+                });
             }
         }
     }

@@ -129,8 +129,9 @@ namespace OCR_BACKEND.Controllers
         {
             if (node.NodeType == HtmlNodeType.Text)
             {
-                var text = System.Net.WebUtility.HtmlDecode(node.InnerText);
-                if (!string.IsNullOrWhiteSpace(text))
+                var text = NormalizeText(node.InnerText);
+
+                if (!string.IsNullOrEmpty(text))
                     col.Item().Text(t => t.Span(text).FontSize(10));
                 return;
             }
@@ -327,7 +328,7 @@ namespace OCR_BACKEND.Controllers
             {
                 if (node.NodeType == HtmlNodeType.Text)
                 {
-                    var text = NormalizeText(System.Net.WebUtility.HtmlDecode(node.InnerText));
+                    var text = NormalizeText(node.InnerText);
                     if (string.IsNullOrEmpty(text)) continue;
 
                     var span = t.Span(text).FontSize(10);
@@ -367,7 +368,7 @@ namespace OCR_BACKEND.Controllers
             {
                 if (node.NodeType == HtmlNodeType.Text)
                 {
-                    var text = NormalizeText(System.Net.WebUtility.HtmlDecode(node.InnerText));
+                    var text = NormalizeText(node.InnerText);
                     if (string.IsNullOrEmpty(text)) continue;
 
                     var span = t.Span(text).FontSize(fontSize);
@@ -574,19 +575,21 @@ namespace OCR_BACKEND.Controllers
 
         private static string NormalizeText(string? text)
         {
-            if (string.IsNullOrEmpty(text)) return string.Empty;
+            if (string.IsNullOrEmpty(text))
+                return string.Empty;
 
-            // Convert NBSP/tabs/newlines into normal spacing for safer line-wrap in PDF layout.
-            var normalized = text
-                .Replace('\u00A0', ' ')
-                .Replace('\t', ' ')
-                .Replace('\r', ' ')
-                .Replace('\n', ' ');
+            // Preserve all spaces exactly as they are
+            text = System.Net.WebUtility.HtmlDecode(text);
 
-            while (normalized.Contains("  "))
-                normalized = normalized.Replace("  ", " ");
+            // Convert normal spaces to non-breaking spaces
+            // so QuestPDF doesn't collapse multiple spaces
+            text = System.Text.RegularExpressions.Regex.Replace(
+                text,
+                @" {2,}",
+                match => new string('\u00A0', match.Value.Length)
+            );
 
-            return normalized.Trim();
+            return text;
         }
 
         private static (string? color, float? fontSize) GetInlineStyle(HtmlNode node)

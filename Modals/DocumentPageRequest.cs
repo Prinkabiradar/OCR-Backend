@@ -13,4 +13,14 @@
         public Guid job_id { get; set; }
         public string? file_name { get; set; }
     }
+
+    public class DeleteDocumentPageRequest
+    {
+        public int DocumentPageId { get; set; }
+        public int DocumentId { get; set; }
+        public int PageNumber { get; set; }
+        public string? JobId { get; set; }
+        public string? FilePath { get; set; }
+        public string? FileName { get; set; }
+    }
 }

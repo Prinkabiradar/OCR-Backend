@@ -56,6 +56,66 @@ namespace OCR_BACKEND.Controllers
             });
         }
 
+        [HttpDelete("DeleteDocumentPage")]
+        public async Task<IActionResult> DeleteDocumentPage(DeleteDocumentPageRequest request)
+        {
+            try
+            {
+                if (request.DocumentPageId <= 0)
+                    return BadRequest(new { message = "Invalid document page ID." });
+
+                var userClaims = HttpContext.User;
+                var idClaim = userClaims.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+                if (!int.TryParse(idClaim, out int userId))
+                    return BadRequest("Invalid user ID.");
+
+                var storageLocation = ResolveStorageLocationForDelete(request);
+                var storageDeleted = false;
+
+                if (!string.IsNullOrWhiteSpace(storageLocation.JobId) &&
+                    !string.IsNullOrWhiteSpace(storageLocation.FileType) &&
+                    !string.IsNullOrWhiteSpace(storageLocation.FileName))
+                {
+                    await _storage.DeleteFileAsync(
+                        storageLocation.JobId,
+                        storageLocation.FileType,
+                        storageLocation.FileName);
+                    storageDeleted = true;
+                }
+                else
+                {
+                    _logger.LogWarning(
+                        "DeleteDocumentPage storage location missing: documentPageId={DocumentPageId}, documentId={DocumentId}, pageNumber={PageNumber}, jobId={JobId}, filePath={FilePath}, fileName={FileName}",
+                        request.DocumentPageId,
+                        request.DocumentId,
+                        request.PageNumber,
+                        request.JobId,
+                        request.FilePath,
+                        request.FileName);
+                }
+
+                var dbDeleted = await _service.DeleteDocumentPage(request.DocumentPageId, userId);
+                if (!dbDeleted)
+                    return NotFound(new { message = "Document page was not found." });
+
+                return Ok(new
+                {
+                    message = "Page deleted successfully.",
+                    documentPageId = request.DocumentPageId,
+                    storageDeleted
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "DeleteDocumentPage failed: documentPageId={DocumentPageId}, documentId={DocumentId}, pageNumber={PageNumber}",
+                    request.DocumentPageId,
+                    request.DocumentId,
+                    request.PageNumber);
+                return BadRequest(new { message = ex.Message });
+            }
+        }
+
         [HttpGet("GetDocumentPages")]
         public async Task<IActionResult> GetDocumentPagesByDocument([FromQuery] OcrDocumentRequest request)
         {
@@ -338,6 +398,48 @@ namespace OCR_BACKEND.Controllers
                 ".tiff" => "image/tiff",
                 _ => "application/octet-stream"
             };
+        }
+
+        private static (string? JobId, string? FileType, string? FileName) ResolveStorageLocationForDelete(
+            DeleteDocumentPageRequest request)
+        {
+            var jobId = request.JobId;
+            var fileType = default(string);
+            var fileName = request.FileName;
+
+            if (!string.IsNullOrWhiteSpace(request.FilePath))
+            {
+                var normalizedPath = request.FilePath.Replace("\\", "/");
+                var pathParts = normalizedPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+
+                fileName = string.IsNullOrWhiteSpace(fileName)
+                    ? Path.GetFileName(normalizedPath)
+                    : fileName;
+
+                if (normalizedPath.Contains("/originals/", StringComparison.OrdinalIgnoreCase))
+                    fileType = "originals";
+                else if (normalizedPath.Contains("/converted/", StringComparison.OrdinalIgnoreCase))
+                    fileType = "converted";
+                else if (pathParts.Length >= 2)
+                    fileType = pathParts[^2];
+
+                if (string.IsNullOrWhiteSpace(jobId))
+                {
+                    var ocrJobsIndex = Array.FindIndex(
+                        pathParts,
+                        p => p.Equals("ocr-jobs", StringComparison.OrdinalIgnoreCase));
+
+                    if (ocrJobsIndex >= 0 && pathParts.Length > ocrJobsIndex + 1)
+                        jobId = pathParts[ocrJobsIndex + 1];
+                    else if (pathParts.Length >= 3)
+                        jobId = pathParts[0];
+                }
+            }
+
+            if (string.IsNullOrWhiteSpace(fileType))
+                fileType = "originals";
+
+            return (jobId, fileType, fileName);
         }
     }
 }

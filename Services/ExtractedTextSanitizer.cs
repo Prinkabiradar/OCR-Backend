@@ -32,6 +32,8 @@ namespace OCR_BACKEND.Services
                         .Where(part =>
                             // Text alignment
                             Regex.IsMatch(part, @"^text-align\s*:\s*(left|right|center|justify)\s*!?$", RegexOptions.IgnoreCase) ||
+                            Regex.IsMatch(part, @"^text-align-last\s*:\s*(left|right|center|justify)\s*!?$", RegexOptions.IgnoreCase) ||
+                            Regex.IsMatch(part, @"^-moz-text-align-last\s*:\s*(left|right|center|justify)\s*!?$", RegexOptions.IgnoreCase) ||
                             // Indentation via margins (ngx-editor, Quill)
                             Regex.IsMatch(part, @"^margin-left\s*:\s*[\d.]+(px|em|rem|%)\s*!?$", RegexOptions.IgnoreCase) ||
                             Regex.IsMatch(part, @"^margin-right\s*:\s*[\d.]+(px|em|rem|%)\s*!?$", RegexOptions.IgnoreCase) ||

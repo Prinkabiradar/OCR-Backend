@@ -1,10 +1,14 @@
-﻿using iText.IO.Font.Constants;
+﻿using HtmlAgilityPack;
+using iText.IO.Font.Constants;
 using iText.Kernel.Font;
 using iText.Kernel.Pdf;
 using iText.Layout;
 using iText.Layout.Element;
 using iText.Layout.Properties;
 using System.Data;
+using System.Net;
+using System.Text;
+using System.Text.RegularExpressions;
 
 namespace OCR_BACKEND.Services
 {
@@ -52,7 +56,7 @@ namespace OCR_BACKEND.Services
                     .SetFontSize(10)
                     .SetMarginTop(10));
 
-                doc.Add(new Paragraph(row["ExtractedText"]?.ToString() ?? "(none)")
+                doc.Add(new Paragraph(ExtractPlainText(row["ExtractedText"]?.ToString()) ?? "(none)")
                     .SetFont(normal)
                     .SetFontSize(9)
                     .SetMarginBottom(20));
@@ -72,6 +76,62 @@ namespace OCR_BACKEND.Services
 
             table.AddCell(new Cell()
                 .Add(new Paragraph(value?.ToString() ?? "-").SetFont(normal).SetFontSize(9)));
+        }
+
+        private static string ExtractPlainText(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return string.Empty;
+
+            var html = DecodeEscapedHtmlMarkup(value);
+            var doc = new HtmlDocument();
+            doc.LoadHtml(html);
+
+            var text = new StringBuilder();
+            AppendText(doc.DocumentNode, text);
+
+            return Regex.Replace(WebUtility.HtmlDecode(text.ToString()), @"[ \t]{2,}", " ").Trim();
+        }
+
+        private static void AppendText(HtmlNode node, StringBuilder text)
+        {
+            if (node.NodeType == HtmlNodeType.Text)
+            {
+                text.Append(node.InnerText);
+                return;
+            }
+
+            var tag = node.Name.ToLowerInvariant();
+            if (tag == "br")
+            {
+                text.AppendLine();
+                return;
+            }
+
+            foreach (var child in node.ChildNodes)
+                AppendText(child, text);
+
+            if (tag is "p" or "div" or "li" or "tr" or "h1" or "h2" or "h3" or "h4" or "h5" or "h6")
+                text.AppendLine();
+        }
+
+        private static string DecodeEscapedHtmlMarkup(string html)
+        {
+            var decoded = html;
+
+            for (var i = 0; i < 5; i++)
+            {
+                if (!Regex.IsMatch(decoded, @"&lt;\s*/?\s*[a-z][\w:-]*(?:\s|/|&gt;)", RegexOptions.IgnoreCase))
+                    break;
+
+                var next = WebUtility.HtmlDecode(decoded);
+                if (string.Equals(next, decoded, StringComparison.Ordinal))
+                    break;
+
+                decoded = next;
+            }
+
+            return decoded;
         }
     }
 }

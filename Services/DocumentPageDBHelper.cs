@@ -67,6 +67,122 @@ namespace OCR_BACKEND.Services
 
             return dt;
         }
+
+        public async Task<bool> DeleteDocumentPage(int documentPageId, int userId)
+        {
+            try
+            {
+                var parameters = new[]
+                {
+                    new NpgsqlParameter("p_documentpageid", documentPageId),
+                    new NpgsqlParameter("p_userid", userId),
+                };
+
+                using var reader = await _sqlDBHelper.ExecuteReaderAsync(
+                    "SELECT public.delete_documentpage(@p_documentpageid, @p_userid)",
+                    parameters);
+
+                if (await reader.ReadAsync())
+                {
+                    var value = reader.GetValue(0);
+                    if (value is bool boolValue) return boolValue;
+                    if (int.TryParse(value?.ToString(), out var intValue)) return intValue > 0;
+                }
+            }
+            catch (PostgresException ex) when (
+                ex.SqlState == PostgresErrorCodes.UndefinedFunction ||
+                ex.SqlState == PostgresErrorCodes.UndefinedTable ||
+                ex.SqlState == PostgresErrorCodes.UndefinedColumn)
+            {
+                // Fall back to direct table updates when the database function is missing
+                // or points at an outdated table/column name.
+            }
+
+            await using (var conn = _sqlDBHelper.CreateConnection())
+            {
+                await conn.OpenAsync();
+                var table = await ResolveDocumentPageTableAsync(conn);
+                if (table == null)
+                    throw new InvalidOperationException("Could not find the document page table in the database schema.");
+
+                var tableName = $"{QuoteIdentifier(table.Value.SchemaName)}.{QuoteIdentifier(table.Value.TableName)}";
+                var idColumn = QuoteIdentifier(table.Value.IdColumnName);
+
+                if (!string.IsNullOrWhiteSpace(table.Value.IsActiveColumnName))
+                {
+                    await using var softDeleteCmd = new NpgsqlCommand(
+                        $@"UPDATE {tableName}
+                              SET {QuoteIdentifier(table.Value.IsActiveColumnName)} = false
+                            WHERE {idColumn} = @p_documentpageid",
+                        conn);
+                    softDeleteCmd.Parameters.AddWithValue("p_documentpageid", documentPageId);
+
+                    var affected = await softDeleteCmd.ExecuteNonQueryAsync();
+                    if (affected > 0) return true;
+                }
+
+                await using var hardDeleteCmd = new NpgsqlCommand(
+                    $@"DELETE FROM {tableName}
+                        WHERE {idColumn} = @p_documentpageid",
+                    conn);
+                hardDeleteCmd.Parameters.AddWithValue("p_documentpageid", documentPageId);
+
+                return await hardDeleteCmd.ExecuteNonQueryAsync() > 0;
+            }
+        }
+
+        private async Task<(string SchemaName, string TableName, string IdColumnName, string? IsActiveColumnName)?> ResolveDocumentPageTableAsync(NpgsqlConnection conn)
+        {
+            const string query = @"
+                SELECT
+                    table_schema,
+                    table_name,
+                    MAX(CASE
+                        WHEN lower(column_name) IN ('documentpageid', 'document_page_id')
+                        THEN column_name
+                    END) AS id_column,
+                    MAX(CASE
+                        WHEN lower(column_name) IN ('isactive', 'is_active')
+                        THEN column_name
+                    END) AS is_active_column
+                FROM information_schema.columns
+                WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
+                GROUP BY table_schema, table_name
+                HAVING MAX(CASE
+                    WHEN lower(column_name) IN ('documentpageid', 'document_page_id')
+                    THEN column_name
+                END) IS NOT NULL
+                ORDER BY
+                    CASE WHEN table_schema = 'public' THEN 0 ELSE 1 END,
+                    CASE lower(table_name)
+                        WHEN 'documentpage' THEN 0
+                        WHEN 'document_page' THEN 1
+                        WHEN 'documentpages' THEN 2
+                        WHEN 'document_pages' THEN 3
+                        WHEN 'tbl_documentpage' THEN 4
+                        WHEN 'tbl_document_page' THEN 5
+                        ELSE 6
+                    END,
+                    table_name
+                LIMIT 1";
+
+            await using var cmd = new NpgsqlCommand(query, conn);
+            await using var reader = await cmd.ExecuteReaderAsync();
+            if (!await reader.ReadAsync()) return null;
+
+            return (
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.IsDBNull(3) ? null : reader.GetString(3)
+            );
+        }
+
+        private static string QuoteIdentifier(string value)
+        {
+            return "\"" + value.Replace("\"", "\"\"") + "\"";
+        }
+
         public async Task<DataTable> GetDocumentsByDocumentType(DocumentFetchRequest model)
         {
             DataTable dt = new DataTable();

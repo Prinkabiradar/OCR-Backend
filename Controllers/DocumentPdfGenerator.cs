@@ -3,6 +3,10 @@ using QuestPDF.Fluent;
 using QuestPDF.Helpers;
 using QuestPDF.Infrastructure;
 using System.Data;
+using System.Diagnostics;
+using System.Net;
+using System.Text;
+using System.Text.RegularExpressions;
 
 namespace OCR_BACKEND.Controllers
 {
@@ -26,6 +30,9 @@ namespace OCR_BACKEND.Controllers
                     $"No valid page rows found for DocumentId {documentId}. PageNumber is missing or invalid."
                 );
             }
+
+            if (TryGenerateBrowserPdf(orderedRows, documentName, out var browserPdf))
+                return browserPdf;
 
             var pdf = QuestPDF.Fluent.Document.Create(container =>
             {
@@ -112,11 +119,365 @@ namespace OCR_BACKEND.Controllers
             return TryGetPageNumber(row, out var pageNumber) ? pageNumber : int.MaxValue;
         }
 
+        private static bool TryGenerateBrowserPdf(
+            IReadOnlyList<DataRow> orderedRows,
+            string documentName,
+            out byte[] pdfBytes)
+        {
+            pdfBytes = Array.Empty<byte>();
+            var chromePath = ResolveChromePath();
+            if (chromePath == null)
+            {
+                Console.WriteLine("[DocumentPdfGenerator] Chrome not found. Falling back to QuestPDF renderer.");
+                return false;
+            }
+
+            var tempDir = Path.Combine(Path.GetTempPath(), $"ocr-pdf-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(tempDir);
+
+            var htmlPath = Path.Combine(tempDir, "document.html");
+            var pdfPath = Path.Combine(tempDir, "document.pdf");
+
+            try
+            {
+                File.WriteAllText(htmlPath, BuildBrowserPdfHtml(orderedRows, documentName), Encoding.UTF8);
+
+                var startInfo = new ProcessStartInfo
+                {
+                    FileName = chromePath,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardError = true,
+                    RedirectStandardOutput = true,
+                };
+
+                startInfo.ArgumentList.Add("--headless=new");
+                startInfo.ArgumentList.Add("--disable-gpu");
+                startInfo.ArgumentList.Add("--no-sandbox");
+                startInfo.ArgumentList.Add("--disable-dev-shm-usage");
+                startInfo.ArgumentList.Add("--run-all-compositor-stages-before-draw");
+                startInfo.ArgumentList.Add("--virtual-time-budget=3000");
+                startInfo.ArgumentList.Add($"--print-to-pdf={pdfPath}");
+                startInfo.ArgumentList.Add("--print-to-pdf-no-header");
+                startInfo.ArgumentList.Add(Path.GetFullPath(htmlPath));
+
+                using var process = Process.Start(startInfo);
+                if (process == null)
+                {
+                    Console.WriteLine("[DocumentPdfGenerator] Chrome process did not start. Falling back to QuestPDF renderer.");
+                    return false;
+                }
+
+                if (!process.WaitForExit(30000))
+                {
+                    try { process.Kill(entireProcessTree: true); } catch { }
+                    Console.WriteLine("[DocumentPdfGenerator] Chrome PDF render timed out. Falling back to QuestPDF renderer.");
+                    return false;
+                }
+
+                if (process.ExitCode != 0 || !File.Exists(pdfPath))
+                {
+                    var error = process.StandardError.ReadToEnd();
+                    Console.WriteLine($"[DocumentPdfGenerator] Chrome PDF render failed. ExitCode={process.ExitCode}. Error={error}");
+                    return false;
+                }
+
+                pdfBytes = File.ReadAllBytes(pdfPath);
+                Console.WriteLine("[DocumentPdfGenerator] PDF generated with Chrome HTML renderer.");
+                return pdfBytes.Length > 0;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[DocumentPdfGenerator] Chrome PDF render exception: {ex.Message}. Falling back to QuestPDF renderer.");
+                return false;
+            }
+            finally
+            {
+                try { Directory.Delete(tempDir, recursive: true); } catch { }
+            }
+        }
+
+        private static string? ResolveChromePath()
+        {
+            var candidates = new[]
+            {
+                Environment.GetEnvironmentVariable("CHROME_BIN"),
+                "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+                "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+                "/usr/bin/google-chrome",
+                "/usr/bin/google-chrome-stable",
+                "/usr/bin/chromium",
+                "/usr/bin/chromium-browser",
+                "google-chrome",
+                "google-chrome-stable",
+                "chromium",
+                "chromium-browser"
+            };
+
+            return candidates.FirstOrDefault(path =>
+                !string.IsNullOrWhiteSpace(path) &&
+                (File.Exists(path) || path.IndexOf(Path.DirectorySeparatorChar) < 0));
+        }
+
+        private static string BuildBrowserPdfHtml(IReadOnlyList<DataRow> orderedRows, string documentName)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("<!doctype html>");
+            sb.AppendLine("<html>");
+            sb.AppendLine("<head>");
+            sb.AppendLine("<meta charset=\"utf-8\">");
+            sb.AppendLine("<title>");
+            sb.Append(WebUtility.HtmlEncode(documentName));
+            sb.AppendLine("</title>");
+            sb.AppendLine("<style>");
+            sb.AppendLine(@"
+@page { size: A4; margin: 20mm; }
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  font-family: Arial, Helvetica, sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+  color: #1a2234;
+  background: #fff;
+}
+.ocr-page {
+  height: calc(297mm - 40mm);
+  max-height: calc(297mm - 40mm);
+  break-after: page;
+  page-break-after: always;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.ocr-page:last-child {
+  break-after: auto;
+  page-break-after: auto;
+}
+.ocr-title {
+  margin-bottom: 6px;
+}
+.ocr-title h1 {
+  margin: 0;
+  font-size: 18px;
+  line-height: 1.25;
+  color: #111827;
+}
+.ocr-generated {
+  margin-top: 4px;
+  font-size: 9px;
+  color: #808995;
+}
+.ocr-header {
+  margin-bottom: 10px;
+}
+.ocr-page-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 16px;
+  margin-bottom: 4px;
+  font-size: 11px;
+  color: #808995;
+}
+.ocr-page-number {
+  font-weight: 700;
+}
+.ocr-document-name {
+  color: #b2bac6;
+  font-size: 9px;
+  text-align: right;
+}
+.ocr-rule {
+  height: 1px;
+  background: #e5e7eb;
+}
+.ocr-content-frame {
+  width: 100%;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.ck-content {
+  width: 100%;
+  padding: 10px 0;
+  overflow-wrap: break-word;
+  word-break: normal;
+  transform-origin: top left;
+}
+.ck-content p {
+  margin: 0 0 1.1em;
+}
+.ck-content h1,
+.ck-content h2,
+.ck-content h3,
+.ck-content h4,
+.ck-content h5,
+.ck-content h6 {
+  margin: 0.65em 0 0.35em;
+  line-height: 1.25;
+  font-weight: 700;
+}
+.ck-content h1 { font-size: 2em; }
+.ck-content h2 { font-size: 1.5em; }
+.ck-content h3 { font-size: 1.25em; }
+.ck-content ul,
+.ck-content ol {
+  margin: 0 0 1.1em 1.5em;
+  padding-left: 1.5em;
+}
+.ck-content blockquote {
+  margin: 1em 0;
+  padding-left: 1em;
+  border-left: 4px solid #d6d9df;
+}
+.ck-content table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1em 0;
+}
+.ck-content table td,
+.ck-content table th {
+  border: 1px solid #d6d9df;
+  padding: 6px 8px;
+}
+.ck-content .text-tiny { font-size: 0.7em; }
+.ck-content .text-small { font-size: 0.85em; }
+.ck-content .text-big { font-size: 1.4em; }
+.ck-content .text-huge { font-size: 1.8em; }
+.ocr-footer {
+  margin-top: auto;
+  padding-top: 8px;
+  text-align: center;
+  font-size: 9px;
+  color: #808995;
+}
+");
+            sb.AppendLine("</style>");
+            sb.AppendLine("<script>");
+            sb.AppendLine(@"
+function fitOcrPages() {
+  var frames = Array.from(document.querySelectorAll('.ocr-content-frame'));
+  var documentScale = 1;
+  var editorToPdfPxScale = 0.42;
+
+  frames.forEach(function(frame) {
+    var content = frame.querySelector('.ck-content');
+    if (!content || content.dataset.pdfLayoutNormalized === 'true') return;
+
+    Array.from(content.querySelectorAll('[style]')).forEach(function(element) {
+      ['marginLeft', 'marginRight', 'paddingLeft', 'paddingRight', 'textIndent'].forEach(function(propertyName) {
+        var value = element.style[propertyName];
+        if (!value || value.indexOf('px') === -1) return;
+
+        var numericValue = parseFloat(value);
+        if (!isFinite(numericValue) || numericValue <= 0) return;
+
+        element.style[propertyName] = (numericValue * editorToPdfPxScale) + 'px';
+      });
+    });
+
+    content.dataset.pdfLayoutNormalized = 'true';
+  });
+
+  frames.forEach(function(frame) {
+    var content = frame.querySelector('.ck-content');
+    if (!content) return;
+
+    content.style.transform = '';
+    content.style.width = '100%';
+  });
+
+  frames.forEach(function(frame) {
+    var content = frame.querySelector('.ck-content');
+    if (!content) return;
+
+    var frameHeight = Math.max(1, frame.clientHeight);
+    var frameWidth = Math.max(1, frame.clientWidth);
+    var contentHeight = Math.max(1, content.scrollHeight);
+    var contentWidth = Math.max(1, content.scrollWidth);
+
+    documentScale = Math.min(
+      documentScale,
+      frameHeight / contentHeight,
+      frameWidth / contentWidth
+    );
+  });
+
+  documentScale = Math.min(1, Math.max(0.32, documentScale));
+
+  frames.forEach(function(frame) {
+    var content = frame.querySelector('.ck-content');
+    if (!content) return;
+
+    if (documentScale < 1) {
+      content.style.transform = 'scale(' + documentScale + ')';
+      content.style.width = (100 / documentScale) + '%';
+    }
+  });
+}
+window.addEventListener('load', fitOcrPages);
+window.addEventListener('beforeprint', fitOcrPages);
+setTimeout(fitOcrPages, 50);
+setTimeout(fitOcrPages, 250);
+");
+            sb.AppendLine("</script>");
+            sb.AppendLine("</head>");
+            sb.AppendLine("<body>");
+
+            for (var i = 0; i < orderedRows.Count; i++)
+            {
+                var row = orderedRows[i];
+                var pageNumber = GetPageNumberOrDefault(row);
+                var html = DecodeEscapedHtmlMarkup(row["ExtractedText"]?.ToString() ?? string.Empty);
+                sb.AppendLine("<section class=\"ocr-page\">");
+                if (i == 0)
+                {
+                    sb.AppendLine("<div class=\"ocr-title\">");
+                    sb.Append("<h1>");
+                    sb.Append(WebUtility.HtmlEncode(documentName));
+                    sb.AppendLine("</h1>");
+                    sb.Append("<div class=\"ocr-generated\">Generated: ");
+                    sb.Append(WebUtility.HtmlEncode(DateTime.Now.ToString("dd MMM yyyy HH:mm")));
+                    sb.AppendLine("</div>");
+                    sb.AppendLine("</div>");
+                }
+                sb.AppendLine("<header class=\"ocr-header\">");
+                sb.AppendLine("<div class=\"ocr-page-row\">");
+                sb.Append("<span class=\"ocr-page-number\">Page ");
+                sb.Append(WebUtility.HtmlEncode(pageNumber.ToString()));
+                sb.AppendLine("</span>");
+                sb.Append("<span class=\"ocr-document-name\">");
+                sb.Append(WebUtility.HtmlEncode(documentName));
+                sb.AppendLine("</span>");
+                sb.AppendLine("</div>");
+                sb.AppendLine("<div class=\"ocr-rule\"></div>");
+                sb.AppendLine("</header>");
+                sb.AppendLine("<div class=\"ocr-content-frame\">");
+                sb.AppendLine("<main class=\"ck-content\">");
+                sb.AppendLine(html);
+                sb.AppendLine("</main>");
+                sb.AppendLine("</div>");
+                sb.Append("<footer class=\"ocr-footer\">Page ");
+                sb.Append(i + 1);
+                sb.Append(" of ");
+                sb.Append(orderedRows.Count);
+                sb.AppendLine("</footer>");
+                sb.AppendLine("</section>");
+            }
+
+            sb.AppendLine("</body>");
+            sb.AppendLine("</html>");
+            return sb.ToString();
+        }
+
         // ── HTML → QuestPDF renderer ──────────────────────────────────────────
 
         private static void RenderHtml(ColumnDescriptor col, string html)
         {
             if (string.IsNullOrWhiteSpace(html)) return;
+
+            html = DecodeEscapedHtmlMarkup(html);
 
             var doc = new HtmlDocument();
             doc.LoadHtml(html);
@@ -186,15 +547,10 @@ namespace OCR_BACKEND.Controllers
 
             col.Item().PaddingBottom(4).PaddingLeft(paddingLeft).Element(el =>
             {
-                var aligned = alignment switch
+                el.Text(t =>
                 {
-                    "center" => el.AlignCenter(),
-                    "right" => el.AlignRight(),
-                    _ => el.AlignLeft()
-                };
+                    ApplyTextAlignment(t, alignment);
 
-                aligned.Text(t =>
-                {
                     if (!string.IsNullOrEmpty(prefix))
                         t.Span(prefix);
                     
@@ -221,15 +577,9 @@ namespace OCR_BACKEND.Controllers
                 // Use proper paragraph indentation with QuestPDF
                 col.Item().PaddingTop(6).PaddingBottom(4).PaddingLeft(indent).Element(el =>
                 {
-                    var aligned = alignment switch
+                    el.Text(t =>
                     {
-                        "center" => el.AlignCenter(),
-                        "right" => el.AlignRight(),
-                        _ => el.AlignLeft()
-                    };
-
-                    aligned.Text(t =>
-                    {
+                        ApplyTextAlignment(t, alignment);
                         t.DefaultTextStyle(s => s.Bold().FontSize(fontSize));
                         RenderInlineNodes(t, node.ChildNodes);
                     });
@@ -239,15 +589,9 @@ namespace OCR_BACKEND.Controllers
             {
                 col.Item().PaddingTop(6).PaddingBottom(4).Element(el =>
                 {
-                    var aligned = alignment switch
+                    el.Text(t =>
                     {
-                        "center" => el.AlignCenter(),
-                        "right" => el.AlignRight(),
-                        _ => el.AlignLeft()
-                    };
-
-                    aligned.Text(t =>
-                    {
+                        ApplyTextAlignment(t, alignment);
                         t.DefaultTextStyle(s => s.Bold().FontSize(fontSize));
                         RenderInlineNodes(t, node.ChildNodes);
                     });
@@ -320,7 +664,7 @@ namespace OCR_BACKEND.Controllers
         // ── Inline rendering ──────────────────────────────────────────────────
 
         private static void RenderInlineNodes(TextDescriptor t, HtmlNodeCollection nodes,
-            bool bold = false, bool italic = false, bool underline = false)
+            bool bold = false, bool italic = false, bool underline = false, bool strikethrough = false)
         {
             if (nodes == null) return;
 
@@ -335,6 +679,7 @@ namespace OCR_BACKEND.Controllers
                     if (bold) span = span.Bold();
                     if (italic) span = span.Italic();
                     if (underline) span = span.Underline();
+                    if (strikethrough) span = span.Strikethrough();
                     continue;
                 }
 
@@ -349,18 +694,26 @@ namespace OCR_BACKEND.Controllers
                 bool isBold = bold || tag is "b" or "strong";
                 bool isItalic = italic || tag is "i" or "em";
                 bool isUnderline = underline || tag is "u";
+                bool isStrikethrough = strikethrough || tag is "s" or "strike" or "del";
 
-                var (color, fontSize) = GetInlineStyle(node);
+                var style = GetInlineStyle(node);
+                isBold = isBold || style.Bold;
+                isItalic = isItalic || style.Italic;
+                isUnderline = isUnderline || style.Underline;
+                isStrikethrough = isStrikethrough || style.Strikethrough;
 
-                if (color != null || fontSize != null || isBold || isItalic || isUnderline)
-                    RenderInlineNodesStyled(t, node.ChildNodes, isBold, isItalic, isUnderline, color, fontSize ?? 10f);
+                if (style.Color != null || style.FontSize != null || style.FontFamily != null ||
+                    isBold || isItalic || isUnderline || isStrikethrough)
+                    RenderInlineNodesStyled(t, node.ChildNodes, isBold, isItalic, isUnderline,
+                        isStrikethrough, style.Color, style.FontSize ?? 10f, style.FontFamily);
                 else
-                    RenderInlineNodes(t, node.ChildNodes, isBold, isItalic, isUnderline);
+                    RenderInlineNodes(t, node.ChildNodes, isBold, isItalic, isUnderline, isStrikethrough);
             }
         }
 
         private static void RenderInlineNodesStyled(TextDescriptor t, HtmlNodeCollection nodes,
-            bool bold, bool italic, bool underline, string? color, float fontSize)
+            bool bold, bool italic, bool underline, bool strikethrough,
+            string? color, float fontSize, string? fontFamily)
         {
             if (nodes == null) return;
 
@@ -375,16 +728,25 @@ namespace OCR_BACKEND.Controllers
                     if (bold) span = span.Bold();
                     if (italic) span = span.Italic();
                     if (underline) span = span.Underline();
+                    if (strikethrough) span = span.Strikethrough();
+                    if (!string.IsNullOrWhiteSpace(fontFamily))
+                    {
+                        try { span = span.FontFamily(fontFamily); } catch { }
+                    }
                     if (color != null) { try { span = span.FontColor(color); } catch { } }
                 }
                 else
                 {
                     var tag = node.Name.ToLower();
+                    var style = GetInlineStyle(node);
                     RenderInlineNodesStyled(t, node.ChildNodes,
-                        bold || tag is "b" or "strong",
-                        italic || tag is "i" or "em",
-                        underline || tag is "u",
-                        color, fontSize);
+                        bold || tag is "b" or "strong" || style.Bold,
+                        italic || tag is "i" or "em" || style.Italic,
+                        underline || tag is "u" || style.Underline,
+                        strikethrough || tag is "s" or "strike" or "del" || style.Strikethrough,
+                        style.Color ?? color,
+                        style.FontSize ?? fontSize,
+                        style.FontFamily ?? fontFamily);
                 }
             }
         }
@@ -401,6 +763,25 @@ namespace OCR_BACKEND.Controllers
                 style, @"text-align\s*:\s*(\w+)",
                 System.Text.RegularExpressions.RegexOptions.IgnoreCase);
             return match.Success ? match.Groups[1].Value.ToLower() : "left";
+        }
+
+        private static void ApplyTextAlignment(TextDescriptor text, string alignment)
+        {
+            switch (alignment)
+            {
+                case "center":
+                    text.AlignCenter();
+                    break;
+                case "right":
+                    text.AlignRight();
+                    break;
+                case "justify":
+                    text.Justify();
+                    break;
+                default:
+                    text.AlignLeft();
+                    break;
+            }
         }
 
         private static (float indent, string mode) GetIndentInfo(HtmlNode node)
@@ -579,11 +960,11 @@ namespace OCR_BACKEND.Controllers
                 return string.Empty;
 
             // Preserve all spaces exactly as they are
-            text = System.Net.WebUtility.HtmlDecode(text);
+            text = WebUtility.HtmlDecode(text);
 
             // Convert normal spaces to non-breaking spaces
             // so QuestPDF doesn't collapse multiple spaces
-            text = System.Text.RegularExpressions.Regex.Replace(
+            text = Regex.Replace(
                 text,
                 @" {2,}",
                 match => new string('\u00A0', match.Value.Length)
@@ -592,11 +973,54 @@ namespace OCR_BACKEND.Controllers
             return text;
         }
 
-        private static (string? color, float? fontSize) GetInlineStyle(HtmlNode node)
+        private static string DecodeEscapedHtmlMarkup(string html)
+        {
+            if (string.IsNullOrWhiteSpace(html))
+                return string.Empty;
+
+            var decoded = html;
+
+            for (var i = 0; i < 5; i++)
+            {
+                if (!ContainsEscapedHtmlTag(decoded))
+                    break;
+
+                var next = WebUtility.HtmlDecode(decoded);
+                if (string.Equals(next, decoded, StringComparison.Ordinal))
+                    break;
+
+                decoded = next;
+            }
+
+            return decoded;
+        }
+        private static bool ContainsEscapedHtmlTag(string value)
+        {
+            return Regex.IsMatch(
+                value,
+                @"&lt;\s*/?\s*[a-z][\w:-]*(?:\s|/|&gt;)",
+                RegexOptions.IgnoreCase);
+        }
+
+        private sealed record InlineStyle(
+            string? Color,
+            float? FontSize,
+            string? FontFamily,
+            bool Bold,
+            bool Italic,
+            bool Underline,
+            bool Strikethrough);
+
+        private static InlineStyle GetInlineStyle(HtmlNode node)
         {
             var style = node.GetAttributeValue("style", "");
             string? color = null;
             float? fontSize = null;
+            string? fontFamily = null;
+            bool bold = false;
+            bool italic = false;
+            bool underline = false;
+            bool strikethrough = false;
 
             var colorMatch = System.Text.RegularExpressions.Regex.Match(
                 style, @"color\s*:\s*([^;]+)");
@@ -604,11 +1028,63 @@ namespace OCR_BACKEND.Controllers
                 color = colorMatch.Groups[1].Value.Trim();
 
             var sizeMatch = System.Text.RegularExpressions.Regex.Match(
-                style, @"font-size\s*:\s*([\d.]+)");
-            if (sizeMatch.Success && float.TryParse(sizeMatch.Groups[1].Value, out float fs))
-                fontSize = fs;
+                style,
+                @"font-size\s*:\s*(?<num>[\d.]+)\s*(?<unit>px|pt|em|rem|%)?",
+                RegexOptions.IgnoreCase);
+            if (sizeMatch.Success && float.TryParse(sizeMatch.Groups["num"].Value, out float fs))
+            {
+                var unit = sizeMatch.Groups["unit"].Value.ToLowerInvariant();
+                fontSize = unit switch
+                {
+                    "em" or "rem" => fs * 10f,
+                    "%" => 10f * fs / 100f,
+                    _ => fs
+                };
+            }
 
-            return (color, fontSize);
+            var familyMatch = Regex.Match(
+                style,
+                @"font-family\s*:\s*([^;]+)",
+                RegexOptions.IgnoreCase);
+            if (familyMatch.Success)
+            {
+                fontFamily = familyMatch.Groups[1].Value
+                    .Split(',', StringSplitOptions.RemoveEmptyEntries)
+                    .Select(x => x.Trim().Trim('\'', '"'))
+                    .FirstOrDefault(x => !string.IsNullOrWhiteSpace(x));
+            }
+
+            var weightMatch = Regex.Match(
+                style,
+                @"font-weight\s*:\s*(bold|bolder|[6-9]00)",
+                RegexOptions.IgnoreCase);
+            bold = weightMatch.Success;
+
+            var fontStyleMatch = Regex.Match(
+                style,
+                @"font-style\s*:\s*(italic|oblique)",
+                RegexOptions.IgnoreCase);
+            italic = fontStyleMatch.Success;
+
+            var decorationMatch = Regex.Match(
+                style,
+                @"text-decoration(?:-line)?\s*:\s*([^;]+)",
+                RegexOptions.IgnoreCase);
+            if (decorationMatch.Success)
+            {
+                var decoration = decorationMatch.Groups[1].Value.ToLowerInvariant();
+                underline = decoration.Contains("underline");
+                strikethrough = decoration.Contains("line-through");
+            }
+
+            return new InlineStyle(
+                color,
+                fontSize,
+                fontFamily,
+                bold,
+                italic,
+                underline,
+                strikethrough);
         }
     }
 }

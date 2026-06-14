@@ -12,8 +12,8 @@ namespace OCR_BACKEND.Controllers
 {
     public static class DocumentPdfGenerator
     {
-        private const float MaxIndentPoints = 72f; // cap at ~1 inch
-        private const int MaxFirstLineIndentSpaces = 20;
+        private const float MaxIndentPoints = 360f;
+        private const int MaxFirstLineIndentSpaces = 80;
 
         public static byte[] Generate(DataTable pages, int documentId, string documentName)
         {
@@ -158,6 +158,7 @@ namespace OCR_BACKEND.Controllers
                 startInfo.ArgumentList.Add("--run-all-compositor-stages-before-draw");
                 startInfo.ArgumentList.Add("--virtual-time-budget=3000");
                 startInfo.ArgumentList.Add($"--print-to-pdf={pdfPath}");
+                startInfo.ArgumentList.Add("--no-pdf-header-footer");
                 startInfo.ArgumentList.Add("--print-to-pdf-no-header");
                 startInfo.ArgumentList.Add(Path.GetFullPath(htmlPath));
 
@@ -308,6 +309,30 @@ body {
 .ck-content p {
   margin: 0 0 1.1em;
 }
+.ck-content [data-indent='1'][data-indent-mode='full'] { margin-left: 40px !important; text-indent: 0 !important; }
+.ck-content [data-indent='2'][data-indent-mode='full'] { margin-left: 80px !important; text-indent: 0 !important; }
+.ck-content [data-indent='3'][data-indent-mode='full'] { margin-left: 120px !important; text-indent: 0 !important; }
+.ck-content [data-indent='4'][data-indent-mode='full'] { margin-left: 160px !important; text-indent: 0 !important; }
+.ck-content [data-indent='5'][data-indent-mode='full'] { margin-left: 200px !important; text-indent: 0 !important; }
+.ck-content [data-indent='6'][data-indent-mode='full'] { margin-left: 240px !important; text-indent: 0 !important; }
+.ck-content [data-indent='7'][data-indent-mode='full'] { margin-left: 280px !important; text-indent: 0 !important; }
+.ck-content [data-indent='8'][data-indent-mode='full'] { margin-left: 320px !important; text-indent: 0 !important; }
+.ck-content [data-indent='9'][data-indent-mode='full'] { margin-left: 360px !important; text-indent: 0 !important; }
+.ck-content [data-indent='10'][data-indent-mode='full'] { margin-left: 400px !important; text-indent: 0 !important; }
+.ck-content [data-indent='11'][data-indent-mode='full'] { margin-left: 440px !important; text-indent: 0 !important; }
+.ck-content [data-indent='12'][data-indent-mode='full'] { margin-left: 480px !important; text-indent: 0 !important; }
+.ck-content [data-indent='1']:not([data-indent-mode='full']) { margin-left: 0 !important; text-indent: 2em !important; }
+.ck-content [data-indent='2']:not([data-indent-mode='full']) { margin-left: 0 !important; text-indent: 4em !important; }
+.ck-content [data-indent='3']:not([data-indent-mode='full']) { margin-left: 0 !important; text-indent: 6em !important; }
+.ck-content [data-indent='4']:not([data-indent-mode='full']) { margin-left: 0 !important; text-indent: 8em !important; }
+.ck-content [data-indent='5']:not([data-indent-mode='full']) { margin-left: 0 !important; text-indent: 10em !important; }
+.ck-content [data-indent='6']:not([data-indent-mode='full']) { margin-left: 0 !important; text-indent: 12em !important; }
+.ck-content [data-indent='7']:not([data-indent-mode='full']) { margin-left: 0 !important; text-indent: 14em !important; }
+.ck-content [data-indent='8']:not([data-indent-mode='full']) { margin-left: 0 !important; text-indent: 16em !important; }
+.ck-content [data-indent='9']:not([data-indent-mode='full']) { margin-left: 0 !important; text-indent: 18em !important; }
+.ck-content [data-indent='10']:not([data-indent-mode='full']) { margin-left: 0 !important; text-indent: 20em !important; }
+.ck-content [data-indent='11']:not([data-indent-mode='full']) { margin-left: 0 !important; text-indent: 22em !important; }
+.ck-content [data-indent='12']:not([data-indent-mode='full']) { margin-left: 0 !important; text-indent: 24em !important; }
 .ck-content h1,
 .ck-content h2,
 .ck-content h3,
@@ -358,12 +383,25 @@ body {
             sb.AppendLine(@"
 function fitOcrPages() {
   var frames = Array.from(document.querySelectorAll('.ocr-content-frame'));
-  var documentScale = 1;
-  var editorToPdfPxScale = 0.42;
+  var editorToPdfPxScale = 1;
+  var minReadableTextWidth = 360;
+
+  function clampIndentValue(value, frameWidth) {
+    var maxByReadableWidth = Math.max(0, frameWidth - minReadableTextWidth);
+    var maxByRatio = frameWidth * 0.45;
+    return Math.min(value, Math.max(0, Math.min(maxByReadableWidth, maxByRatio)));
+  }
 
   frames.forEach(function(frame) {
     var content = frame.querySelector('.ck-content');
     if (!content || content.dataset.pdfLayoutNormalized === 'true') return;
+    var frameWidth = Math.max(1, frame.clientWidth);
+
+    Array.from(content.querySelectorAll('[data-first-line-indent]')).forEach(function(element) {
+      var numericValue = parseFloat(element.getAttribute('data-first-line-indent') || '');
+      if (!isFinite(numericValue) || numericValue <= 0) return;
+      element.style.textIndent = clampIndentValue(numericValue, frameWidth) + 'px';
+    });
 
     Array.from(content.querySelectorAll('[style]')).forEach(function(element) {
       ['marginLeft', 'marginRight', 'paddingLeft', 'paddingRight', 'textIndent'].forEach(function(propertyName) {
@@ -373,7 +411,25 @@ function fitOcrPages() {
         var numericValue = parseFloat(value);
         if (!isFinite(numericValue) || numericValue <= 0) return;
 
-        element.style[propertyName] = (numericValue * editorToPdfPxScale) + 'px';
+        var scaledValue = numericValue * editorToPdfPxScale;
+        if (propertyName === 'marginLeft' || propertyName === 'paddingLeft' || propertyName === 'textIndent') {
+          scaledValue = clampIndentValue(scaledValue, frameWidth);
+        }
+
+        element.style[propertyName] = scaledValue + 'px';
+      });
+    });
+
+    Array.from(content.querySelectorAll('*')).forEach(function(element) {
+      var computed = window.getComputedStyle(element);
+      ['marginLeft', 'paddingLeft', 'textIndent'].forEach(function(propertyName) {
+        var numericValue = parseFloat(computed[propertyName] || '');
+        if (!isFinite(numericValue) || numericValue <= 0) return;
+
+        var clampedValue = clampIndentValue(numericValue, frameWidth);
+        if (clampedValue < numericValue) {
+          element.style[propertyName] = clampedValue + 'px';
+        }
       });
     });
 
@@ -396,23 +452,11 @@ function fitOcrPages() {
     var frameWidth = Math.max(1, frame.clientWidth);
     var contentHeight = Math.max(1, content.scrollHeight);
     var contentWidth = Math.max(1, content.scrollWidth);
+    var pageScale = Math.min(1, frameHeight / contentHeight, frameWidth / contentWidth);
 
-    documentScale = Math.min(
-      documentScale,
-      frameHeight / contentHeight,
-      frameWidth / contentWidth
-    );
-  });
-
-  documentScale = Math.min(1, Math.max(0.32, documentScale));
-
-  frames.forEach(function(frame) {
-    var content = frame.querySelector('.ck-content');
-    if (!content) return;
-
-    if (documentScale < 1) {
-      content.style.transform = 'scale(' + documentScale + ')';
-      content.style.width = (100 / documentScale) + '%';
+    if (pageScale < 1) {
+      content.style.transform = 'scale(' + pageScale + ')';
+      content.style.width = (100 / pageScale) + '%';
     }
   });
 }
@@ -429,7 +473,7 @@ setTimeout(fitOcrPages, 250);
             {
                 var row = orderedRows[i];
                 var pageNumber = GetPageNumberOrDefault(row);
-                var html = DecodeEscapedHtmlMarkup(row["ExtractedText"]?.ToString() ?? string.Empty);
+                var html = NormalizeHtmlForPdfRendering(row["ExtractedText"]?.ToString() ?? string.Empty);
                 sb.AppendLine("<section class=\"ocr-page\">");
                 if (i == 0)
                 {
@@ -477,7 +521,7 @@ setTimeout(fitOcrPages, 250);
         {
             if (string.IsNullOrWhiteSpace(html)) return;
 
-            html = DecodeEscapedHtmlMarkup(html);
+            html = NormalizeHtmlForPdfRendering(html);
 
             var doc = new HtmlDocument();
             doc.LoadHtml(html);
@@ -788,6 +832,14 @@ setTimeout(fitOcrPages, 250);
         {
             var style = node.GetAttributeValue("style", "");
             var dataIndentMode = GetIndentMode(node, style);
+
+            var firstLineIndentAttr = node.GetAttributeValue("data-first-line-indent", "");
+            if (!string.IsNullOrWhiteSpace(firstLineIndentAttr) &&
+                float.TryParse(firstLineIndentAttr, out var firstLineIndentPx) &&
+                firstLineIndentPx > 0)
+            {
+                return (Math.Min(MaxIndentPoints, Math.Max(0, firstLineIndentPx * 0.75f)), "first-line");
+            }
             
             // Check for indent="X" attribute from frontend
             var indentAttr = node.GetAttributeValue("indent", "");
@@ -838,7 +890,7 @@ setTimeout(fitOcrPages, 250);
             // Check for margin-left in style (full paragraph indentation)
             var marginLeftMatch = System.Text.RegularExpressions.Regex.Match(
                 style,
-                @"margin-left\s*:\s*(?<num>[\d.]+(?:\.\d+)?)\s*(?<unit>px|em|rem|%)?",
+                @"(?:margin-left|padding-left)\s*:\s*(?<num>[\d.]+(?:\.\d+)?)\s*(?<unit>px|em|rem|%)?",
                 System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
             if (marginLeftMatch.Success &&
@@ -895,7 +947,7 @@ setTimeout(fitOcrPages, 250);
 
             var marginLeftMatch = System.Text.RegularExpressions.Regex.Match(
                 style,
-                @"margin-left\s*:\s*(?<num>[\d.]+(?:\.\d+)?)\s*(?<unit>px|em|rem|%)?",
+                @"(?:margin-left|padding-left)\s*:\s*(?<num>[\d.]+(?:\.\d+)?)\s*(?<unit>px|em|rem|%)?",
                 System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
             if (marginLeftMatch.Success &&
@@ -914,7 +966,7 @@ setTimeout(fitOcrPages, 250);
             // Try margin-left first
             var marginMatch = System.Text.RegularExpressions.Regex.Match(
                 style,
-                @"margin-left\s*:\s*(?<num>[\d.]+(?:\.\d+)?)\s*(?<unit>px|em|rem)?",
+                @"(?:margin-left|padding-left)\s*:\s*(?<num>[\d.]+(?:\.\d+)?)\s*(?<unit>px|em|rem)?",
                 System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
             if (marginMatch.Success && float.TryParse(marginMatch.Groups["num"].Value, out var mValue))
@@ -993,6 +1045,32 @@ setTimeout(fitOcrPages, 250);
             }
 
             return decoded;
+        }
+
+        private static string NormalizeHtmlForPdfRendering(string html)
+        {
+            var normalized = DecodeEscapedHtmlMarkup(html);
+            if (string.IsNullOrWhiteSpace(normalized))
+                return string.Empty;
+
+            normalized = Regex.Replace(
+                normalized,
+                @"\sstyle\s*=\s*(['""])(.*?)\1",
+                match =>
+                {
+                    var quote = match.Groups[1].Value;
+                    var style = match.Groups[2].Value;
+                    style = Regex.Replace(style, @"\bmarginleft\s*:", "margin-left:", RegexOptions.IgnoreCase);
+                    style = Regex.Replace(style, @"\bmarginright\s*:", "margin-right:", RegexOptions.IgnoreCase);
+                    style = Regex.Replace(style, @"\bpaddingleft\s*:", "padding-left:", RegexOptions.IgnoreCase);
+                    style = Regex.Replace(style, @"\bpaddingright\s*:", "padding-right:", RegexOptions.IgnoreCase);
+                    style = Regex.Replace(style, @"\btextindent\s*:", "text-indent:", RegexOptions.IgnoreCase);
+                    style = Regex.Replace(style, @"\btextalign\s*:", "text-align:", RegexOptions.IgnoreCase);
+                    return $" style={quote}{style}{quote}";
+                },
+                RegexOptions.IgnoreCase | RegexOptions.Singleline);
+
+            return normalized;
         }
         private static bool ContainsEscapedHtmlTag(string value)
         {

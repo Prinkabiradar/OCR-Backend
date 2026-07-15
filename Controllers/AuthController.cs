@@ -30,7 +30,18 @@ namespace OCR_BACKEND.Controllers
                 return BadRequest(new { message = "Invalid credentials" });
 
             var token = _jwt.GenerateToken(user);
-            return Ok(new AuthenticateResponse(user, token));
+            var response = new AuthenticateResponse(user, token)
+            {
+                SessionId = await _userService.RecordLoginAsync(user.UserId)
+            };
+            return Ok(response);
+        }
+
+        [HttpPost("logout")]
+        public async Task<IActionResult> Logout([FromBody] LogoutModel model)
+        {
+            await _userService.RecordLogoutAsync(model.UserId, model.SessionId);
+            return Ok(new { message = "Logout recorded successfully" });
         }
 
         [HttpGet("getUserByAccessToken")]
@@ -89,6 +100,11 @@ namespace OCR_BACKEND.Controllers
         public string password { get; set; }
     }
     public class SendOtpModel { public string EmailOrMobile { get; set; } }
+    public class LogoutModel
+    {
+        public int UserId { get; set; }
+        public Guid? SessionId { get; set; }
+    }
     public class VerifyOtpModel { public string EmailOrMobile { get; set; } public string Otp { get; set; } }
     public class ResetPasswordModel
     {

@@ -79,6 +79,8 @@ namespace OCR_BACKEND.Services
             foreach (var file in files)
             {
                 var safeName = SanitiseFileName(file.FileName);
+                await using var uploadStream = file.OpenReadStream();
+                safeName = await CorrectFileNameExtensionFromSignatureAsync(safeName, uploadStream, ct);
                 var uniqueName = BuildUniqueSafeFileName(safeName);
                 
                 // Save to storage (Digital Ocean or local)
@@ -86,7 +88,7 @@ namespace OCR_BACKEND.Services
                     dbJobId.ToString(),
                     "originals",
                     uniqueName,
-                    file.OpenReadStream(),
+                    uploadStream,
                     ct);
 
                 uploadedPaths.Add(storagePath);
@@ -724,6 +726,91 @@ namespace OCR_BACKEND.Services
             var fileNameWithoutExt = Path.GetFileNameWithoutExtension(safeFileName);
             var extension = Path.GetExtension(safeFileName);
             return $"{fileNameWithoutExt}_{Guid.NewGuid():N}{extension}";
+        }
+
+        private async Task<string> CorrectFileNameExtensionFromSignatureAsync(
+            string safeFileName,
+            Stream uploadStream,
+            CancellationToken ct)
+        {
+            if (!uploadStream.CanSeek)
+                return safeFileName;
+
+            var originalPosition = uploadStream.Position;
+            var signature = new byte[12];
+            var bytesRead = await uploadStream.ReadAsync(signature.AsMemory(0, signature.Length), ct);
+            uploadStream.Position = originalPosition;
+
+            var actualExt = DetectKnownExtensionFromSignature(signature.AsSpan(0, bytesRead));
+            if (string.IsNullOrWhiteSpace(actualExt))
+                return safeFileName;
+
+            var currentExt = Path.GetExtension(safeFileName);
+            if (currentExt.Equals(actualExt, StringComparison.OrdinalIgnoreCase))
+                return safeFileName;
+
+            if (actualExt.Equals(".jpg", StringComparison.OrdinalIgnoreCase) &&
+                currentExt.Equals(".jpeg", StringComparison.OrdinalIgnoreCase))
+                return safeFileName;
+
+            var correctedName = Path.ChangeExtension(safeFileName, actualExt);
+            _logger.LogInformation(
+                "Corrected uploaded file extension from {OriginalExt} to {ActualExt} for {FileName}.",
+                string.IsNullOrWhiteSpace(currentExt) ? "(none)" : currentExt,
+                actualExt,
+                safeFileName);
+
+            return correctedName;
+        }
+
+        private static string? DetectKnownExtensionFromSignature(ReadOnlySpan<byte> bytes)
+        {
+            if (bytes.Length >= 5 &&
+                bytes[0] == 0x25 &&
+                bytes[1] == 0x50 &&
+                bytes[2] == 0x44 &&
+                bytes[3] == 0x46 &&
+                bytes[4] == 0x2D)
+                return ".pdf";
+
+            if (bytes.Length >= 3 &&
+                bytes[0] == 0xFF &&
+                bytes[1] == 0xD8 &&
+                bytes[2] == 0xFF)
+                return ".jpg";
+
+            if (bytes.Length >= 8 &&
+                bytes[0] == 0x89 &&
+                bytes[1] == 0x50 &&
+                bytes[2] == 0x4E &&
+                bytes[3] == 0x47 &&
+                bytes[4] == 0x0D &&
+                bytes[5] == 0x0A &&
+                bytes[6] == 0x1A &&
+                bytes[7] == 0x0A)
+                return ".png";
+
+            if (bytes.Length >= 6 &&
+                bytes[0] == 0x47 &&
+                bytes[1] == 0x49 &&
+                bytes[2] == 0x46 &&
+                bytes[3] == 0x38 &&
+                (bytes[4] == 0x37 || bytes[4] == 0x39) &&
+                bytes[5] == 0x61)
+                return ".gif";
+
+            if (bytes.Length >= 12 &&
+                bytes[0] == 0x52 &&
+                bytes[1] == 0x49 &&
+                bytes[2] == 0x46 &&
+                bytes[3] == 0x46 &&
+                bytes[8] == 0x57 &&
+                bytes[9] == 0x45 &&
+                bytes[10] == 0x42 &&
+                bytes[11] == 0x50)
+                return ".webp";
+
+            return null;
         }
 
         private async Task<OcrJobResult> BuildRetriedResultAsync(

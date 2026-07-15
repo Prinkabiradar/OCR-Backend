@@ -48,6 +48,8 @@ builder.Services.AddScoped<ISuggestionService, SuggestionService>();
 builder.Services.AddScoped<SuggestionDBHelper>();
 
 builder.Services.AddScoped<IEmailService, EmailService>();
+builder.Services.AddScoped<UserSessionDBHelper>();
+builder.Services.AddScoped<IProductivityReportService, ProductivityReportService>();
 
 builder.Services.AddHttpClient<GeminiService>(client =>
 {
@@ -59,6 +61,7 @@ builder.Services.AddSingleton<OcrJobCancellationRegistry>(); // registered once 
 builder.Services.AddSingleton<OcrJobDBHelper>();
 builder.Services.AddScoped<IOcrJobService, OcrJobService>();
 builder.Services.AddHostedService<OcrWorkerService>();
+builder.Services.AddHostedService<NightlyProductivityReportHostedService>();
 builder.Services.AddScoped<IFileConversionService, FileConversionService>();
 builder.Services.AddSingleton<IPdfToImageService, PdfToImageService>();
 
@@ -106,7 +109,8 @@ const string FrontendCorsPolicy = "FrontendCorsPolicy";
 var allowedOrigins = new[]
 {
     "https://tts.sharpflux.com",
-    "https://ocr.sharpflux.com"
+    "https://ocr.sharpflux.com",
+    "https://hda.harikrishnamandir.com"
 };
 
 builder.Services.AddCors(options =>
@@ -117,6 +121,7 @@ builder.Services.AddCors(options =>
             .SetIsOriginAllowed(origin =>
             {
                 if (string.IsNullOrWhiteSpace(origin)) return false;
+                origin = origin.TrimEnd('/');
                 if (allowedOrigins.Contains(origin, StringComparer.OrdinalIgnoreCase)) return true;
 
                 if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri)) return false;

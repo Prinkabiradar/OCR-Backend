@@ -6,6 +6,8 @@ namespace OCR_BACKEND.Services
     public interface IUserService
     {
         Task<User?> AuthenticateUserAsync(string username, string password);
+        Task<Guid> RecordLoginAsync(int userId);
+        Task RecordLogoutAsync(int userId, Guid? sessionId);
         Task<User> GetUserByAccessToken(string accessToken);
         Task<(bool Success, string Message)> SendOtpAsync(string emailOrMobile);
         Task<(bool Success, int UserId)> VerifyOtpAsync(string emailOrMobile, string otp);
@@ -15,13 +17,19 @@ namespace OCR_BACKEND.Services
     public class UserService : IUserService
     {
         private readonly UserDBHelper _db;
+        private readonly UserSessionDBHelper _sessionDb;
 
         private readonly IConfiguration _config;
         private readonly IEmailService _emailService;
 
-        public UserService(UserDBHelper db, IConfiguration config, IEmailService emailService)
+        public UserService(
+            UserDBHelper db,
+            UserSessionDBHelper sessionDb,
+            IConfiguration config,
+            IEmailService emailService)
         {
             _db = db;
+            _sessionDb = sessionDb;
             _config = config;
             _emailService = emailService;
         }
@@ -31,6 +39,16 @@ namespace OCR_BACKEND.Services
             var hashedPassword = PasswordHelper.HashPassword(password);
 
             return _db.AuthenticateUserAsync(username, hashedPassword);
+        }
+
+        public Task<Guid> RecordLoginAsync(int userId)
+        {
+            return _sessionDb.RecordLoginAsync(userId);
+        }
+
+        public Task RecordLogoutAsync(int userId, Guid? sessionId)
+        {
+            return _sessionDb.RecordLogoutAsync(userId, sessionId);
         }
         public async Task<User> GetUserByAccessToken(string accessToken)
         {

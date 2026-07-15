@@ -7,6 +7,7 @@
         public string Role { get; set; }
 
         public string authToken { get; set; } 
+        public Guid SessionId { get; set; }
 
         public int roleId { get; set; }
 

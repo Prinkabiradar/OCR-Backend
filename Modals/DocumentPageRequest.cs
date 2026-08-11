@@ -23,4 +23,10 @@
         public string? FilePath { get; set; }
         public string? FileName { get; set; }
     }
+
+    public class ReopenDocumentVerificationRequest
+    {
+        public int DocumentId { get; set; }
+        public int PendingStatusId { get; set; }
+    }
 }

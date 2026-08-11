@@ -8,6 +8,7 @@ namespace OCR_BACKEND.Services
         Task<int> InsertUpdateDocumentPage(DocumentPageRequest model);
         Task<DataTable> GetDocumentPagesByDocument(OcrDocumentRequest request);
         Task<bool> DeleteDocumentPage(int documentPageId, int userId);
+        Task<int> ReopenDocumentForVerification(int documentId, int pendingStatusId, int userId);
         Task<DataTable> GetDocumentsByDocumentType(DocumentFetchRequest model);
         Task<DataTable> GetSuggestionPages(SuggestionPageRequest model);
     }
@@ -37,6 +38,9 @@ namespace OCR_BACKEND.Services
         {
             return await _sqlDBHelper.DeleteDocumentPage(documentPageId, userId);
         }
+
+        public Task<int> ReopenDocumentForVerification(int documentId, int pendingStatusId, int userId)
+            => _sqlDBHelper.ReopenDocumentForVerification(documentId, pendingStatusId, userId);
         public async Task<DataTable> GetDocumentsByDocumentType(DocumentFetchRequest model)
         {
             return await _sqlDBHelper.GetDocumentsByDocumentType(model);

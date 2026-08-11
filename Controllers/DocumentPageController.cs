@@ -56,6 +56,37 @@ namespace OCR_BACKEND.Controllers
             });
         }
 
+        [HttpPost("ReopenForVerification")]
+        public async Task<IActionResult> ReopenForVerification(ReopenDocumentVerificationRequest request)
+        {
+            if (request.DocumentId <= 0 || request.PendingStatusId <= 0)
+                return BadRequest(new { message = "DocumentId and PendingStatusId are required." });
+
+            var idClaim = HttpContext.User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+            if (!int.TryParse(idClaim, out var userId))
+                return BadRequest(new { message = "Invalid user ID." });
+
+            try
+            {
+                var affectedPages = await _service.ReopenDocumentForVerification(
+                    request.DocumentId, request.PendingStatusId, userId);
+                if (affectedPages == 0)
+                    return NotFound(new { message = "No pages were found for this document." });
+
+                return Ok(new
+                {
+                    message = "Document reopened for editing and verification.",
+                    request.DocumentId,
+                    affectedPages
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to reopen document {DocumentId}", request.DocumentId);
+                return BadRequest(new { message = ex.Message });
+            }
+        }
+
         [HttpDelete("DeleteDocumentPage")]
         public async Task<IActionResult> DeleteDocumentPage(DeleteDocumentPageRequest request)
         {

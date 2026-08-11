@@ -131,6 +131,58 @@ namespace OCR_BACKEND.Services
             }
         }
 
+        public async Task<int> ReopenDocumentForVerification(int documentId, int pendingStatusId, int userId)
+        {
+            await using var conn = _sqlDBHelper.CreateConnection();
+            await conn.OpenAsync();
+
+            var table = await ResolveDocumentPageTableAsync(conn);
+            if (table == null)
+                throw new InvalidOperationException("Could not find the document page table in the database schema.");
+
+            var documentIdColumn = await ResolveColumnAsync(
+                conn, table.Value.SchemaName, table.Value.TableName,
+                new[] { "documentid", "document_id" });
+            var statusColumn = await ResolveColumnAsync(
+                conn, table.Value.SchemaName, table.Value.TableName,
+                new[] { "statusid", "status_id" });
+
+            if (documentIdColumn == null || statusColumn == null)
+                throw new InvalidOperationException("Document page status columns could not be resolved.");
+
+            var tableName = $"{QuoteIdentifier(table.Value.SchemaName)}.{QuoteIdentifier(table.Value.TableName)}";
+            await using var cmd = new NpgsqlCommand(
+                $@"UPDATE {tableName}
+                      SET {QuoteIdentifier(statusColumn)} = @p_statusid
+                    WHERE {QuoteIdentifier(documentIdColumn)} = @p_documentid",
+                conn);
+            cmd.Parameters.AddWithValue("p_statusid", pendingStatusId);
+            cmd.Parameters.AddWithValue("p_documentid", documentId);
+
+            return await cmd.ExecuteNonQueryAsync();
+        }
+
+        private static async Task<string?> ResolveColumnAsync(
+            NpgsqlConnection conn, string schemaName, string tableName, IEnumerable<string> candidates)
+        {
+            const string query = @"SELECT column_name
+                                     FROM information_schema.columns
+                                    WHERE table_schema = @p_schema
+                                      AND table_name = @p_table";
+            await using var cmd = new NpgsqlCommand(query, conn);
+            cmd.Parameters.AddWithValue("p_schema", schemaName);
+            cmd.Parameters.AddWithValue("p_table", tableName);
+            await using var reader = await cmd.ExecuteReaderAsync();
+
+            var candidateSet = candidates.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            while (await reader.ReadAsync())
+            {
+                var column = reader.GetString(0);
+                if (candidateSet.Contains(column)) return column;
+            }
+            return null;
+        }
+
         private async Task<(string SchemaName, string TableName, string IdColumnName, string? IsActiveColumnName)?> ResolveDocumentPageTableAsync(NpgsqlConnection conn)
         {
             const string query = @"

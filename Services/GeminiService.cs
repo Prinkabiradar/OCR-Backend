@@ -125,6 +125,50 @@ namespace OCR_BACKEND.Services
             return responseBody;
         }
 
+        public async Task<string> ExtractAndTranslateFileBytes(
+            byte[] bytes,
+            string contentType,
+            string targetLanguage,
+            string? sourceLanguage = null,
+            string? modelOverride = null,
+            CancellationToken ct = default)
+        {
+            if (bytes.Length > MaxInlineBytes)
+                throw new InvalidOperationException("File exceeds the 18MB Gemini inline limit.");
+            if (string.IsNullOrWhiteSpace(targetLanguage))
+                throw new ArgumentException("A target language is required.", nameof(targetLanguage));
+
+            var apiKey = ResolveApiKey();
+            var model = string.IsNullOrWhiteSpace(modelOverride)
+                ? (_config["Gemini:Model"] ?? "gemini-2.5-flash")
+                : modelOverride.Trim();
+            var sourceInstruction = string.IsNullOrWhiteSpace(sourceLanguage)
+                ? "Detect the source language."
+                : $"The source language is {sourceLanguage.Trim()}.";
+            var prompt = $@"Perform OCR on every page of this document and translate the extracted content into {targetLanguage.Trim()}.
+{sourceInstruction}
+Return only JSON with this shape:
+{{""source_language"":""<detected language>"",""target_language"":""{targetLanguage.Trim()}"",""pages"":[{{""page"":1,""extracted_text"":""<original clean HTML>"",""translated_text"":""<translated clean HTML>""}}]}}
+Preserve headings, paragraphs, tables, emphasis, line breaks, names, dates, numbers, and page order. Do not summarize or omit content.";
+
+            var body = new
+            {
+                contents = new[] { new { parts = new object[]
+                {
+                    new { inline_data = new { mime_type = contentType, data = Convert.ToBase64String(bytes) } },
+                    new { text = prompt }
+                } } },
+                generationConfig = new { responseMimeType = "application/json" }
+            };
+            using var response = await _http.PostAsync(
+                $"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={apiKey}",
+                new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json"), ct);
+            var responseBody = await response.Content.ReadAsStringAsync(ct);
+            if (!response.IsSuccessStatusCode)
+                throw new InvalidOperationException($"Gemini translation request failed ({(int)response.StatusCode}): {responseBody}");
+            return responseBody;
+        }
+
         // ── Health check to verify Gemini API is available and responsive ────
         public async Task<(bool IsHealthy, string Message)> CheckGeminiHealth(string? modelOverride = null, CancellationToken ct = default)
         {

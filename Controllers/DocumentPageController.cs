@@ -17,17 +17,20 @@ namespace OCR_BACKEND.Controllers
         private readonly IConfiguration _config;
         private readonly IStorageService _storage;
         private readonly ILogger<DocumentPageController> _logger;
+        private readonly UserDBHelper _userDb;
 
         public DocumentPageController(
             IDocumentPageService service,
             IConfiguration config,
             IStorageService storage,
-            ILogger<DocumentPageController> logger)
+            ILogger<DocumentPageController> logger,
+            UserDBHelper userDb)
         {
             _service = service;
             _config = config;
             _storage = storage;
             _logger = logger;
+            _userDb = userDb;
         }
 
         [HttpPost("InsertUpdateDocumentPage")]
@@ -35,14 +38,21 @@ namespace OCR_BACKEND.Controllers
         {
             var userClaims = HttpContext.User;
             var idClaim = userClaims.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-            var RoleIdClaim = userClaims.FindFirst(ClaimTypes.Role)?.Value;
             if (!int.TryParse(idClaim, out int Id))
                 return BadRequest("Invalid user ID.");
-            if (!int.TryParse(RoleIdClaim, out int RoleId))
-                return BadRequest("Invalid employee ID in token.");
+
+            // Resolve the role from the DB rather than the JWT's Role claim. The claim is
+            // baked in at login and tokens live for up to a year (Jwt:ExpiryMinutes), so if
+            // an admin changes this user's role (e.g. Uploader -> Verifier) after they logged
+            // in, the stale claim would keep forcing the old role's status on every save until
+            // they log out and back in. Looking it up fresh guarantees the current role applies
+            // immediately.
+            var RoleId = await _userDb.GetCurrentRoleIdAsync(Id);
+            if (RoleId == null)
+                return BadRequest("Invalid or inactive user.");
 
             model.UserId = Id;
-            model.RoleId = RoleId;
+            model.RoleId = RoleId.Value;
 
             var id = await _service.InsertUpdateDocumentPage(model);
 
@@ -206,14 +216,16 @@ namespace OCR_BACKEND.Controllers
             {
                 var userClaims = HttpContext.User;
                 var idClaim = userClaims.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-                var RoleIdClaim = userClaims.FindFirst(ClaimTypes.Role)?.Value;
                 if (!int.TryParse(idClaim, out int Id))
                     return BadRequest("Invalid user ID.");
-                if (!int.TryParse(RoleIdClaim, out int RoleId))
-                    return BadRequest("Invalid employee ID in token.");
-                
 
-                request.RoleId = RoleId;
+                // Same staleness concern as InsertUpdateDocumentPage: resolve the role from
+                // the DB, not the (possibly long-lived, now-stale) JWT claim.
+                var RoleId = await _userDb.GetCurrentRoleIdAsync(Id);
+                if (RoleId == null)
+                    return BadRequest("Invalid or inactive user.");
+
+                request.RoleId = RoleId.Value;
                 DataTable response = await _service.GetSuggestionPages(request);
 
                 var lst = response.AsEnumerable()

@@ -100,5 +100,31 @@ namespace OCR_BACKEND.Services
             await _db.ExecuteNonQueryAsync(
                 "SELECT fn_reset_password_by_userid(@p_userid, @p_newpass)", parameters);
         }
+
+        /// <summary>
+        /// Looks up the user's CURRENT RoleId directly from the users table.
+        /// JWT tokens live for up to a year (Jwt:ExpiryMinutes), so the RoleId claim
+        /// baked into an already-issued token can go stale the moment an admin changes
+        /// that user's role. Any endpoint that uses RoleId to decide what gets written
+        /// (e.g. document verification status) must call this instead of trusting the
+        /// token claim, or a user's role change won't take effect until they log out
+        /// and back in.
+        /// </summary>
+        public async Task<int?> GetCurrentRoleIdAsync(int userId)
+        {
+            var parameters = new[]
+            {
+                new NpgsqlParameter("p_userid", userId)
+            };
+
+            using var reader = await _db.ExecuteReaderAsync(
+                "SELECT roleid FROM users WHERE userid = @p_userid AND isactive = true",
+                parameters);
+
+            if (await reader.ReadAsync() && !reader.IsDBNull(reader.GetOrdinal("roleid")))
+                return reader.GetInt32(reader.GetOrdinal("roleid"));
+
+            return null;
+        }
     }
 }
